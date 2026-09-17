@@ -58,7 +58,7 @@ standard library, so running from source needs no `pip install`.
 除 GUI 主题外无第三方依赖：
 
 ```bash
-git clone https://github.com/<你的用户名>/rpykit-luna.git
+git clone https://github.com/JXZ666/rpykit-luna.git
 cd rpykit-luna
 python luna_main.py                    # 打开窗口
 python luna_main.py "D:\Games\SomeGame"  # 直接安装
