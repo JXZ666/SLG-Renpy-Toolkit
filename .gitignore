@@ -1,0 +1,18 @@
+# Build output
+build/
+dist/
+*.spec.bak
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Per-user runtime state created by the tool
+_work/
+
+# Local configuration. config.local.toml can hold a translator API key, so it is
+# never committed even though this tool does not read it.
+config.local.toml
+state.json

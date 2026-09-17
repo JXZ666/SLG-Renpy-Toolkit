@@ -1,0 +1,6 @@
+# Optional. lunagui.py imports this inside a try/except, so the window still
+# opens without it - you only lose the themed look.
+sv-ttk==2.6.1
+
+# Not listed above: the tool itself is pure standard library. Pillow is needed
+# only to regenerate the icon, via tools/make_icon.py.
