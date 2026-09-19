@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""rpykit-luna - give a Ren'Py game the glyphs its own fonts are missing.
+"""SLG-Renpy神奇妙妙工具 - give a Ren'Py game the glyphs its own fonts are missing.
 
 LunaTranslator can replace a Ren'Py game's text in memory, but it changes fonts
 through the system font APIs, which Ren'Py does not use: the engine loads a
@@ -16,7 +16,7 @@ opening logos stop being part of every launch.
 
   double-click the exe        -> a window
   drop a game folder onto it  -> runs headless and exits
-  rpykit-luna <dir> --revert  -> puts the game back
+  SLG-Renpy-Toolkit <dir> --revert  -> puts the game back
 
 Every change is a feature listed in features.py, and the two ways of choosing
 them agree: `--features a,b` says which, and `--no-skip-intro` is the older
@@ -42,6 +42,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 import argparse  # noqa: E402
 
+import branding  # noqa: E402
 import cmd_fontfix  # noqa: E402
 import features  # noqa: E402
 
@@ -112,7 +113,7 @@ def _pause_on_error(code):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        prog="rpykit-luna",
+        prog=branding.APP_SLUG,
         description="Install CJK fonts into a Ren'Py game so LunaTranslator's "
                     "text renders as Chinese instead of tofu.")
     parser.add_argument("game_dir", nargs="?", default=None,
@@ -138,8 +139,8 @@ def main(argv=None):
 
     if args.game_dir is None:
         _hide_console()
-        import lunagui
-        lunagui.main()
+        import appgui
+        appgui.main()
         return 0
 
     ns = argparse.Namespace(

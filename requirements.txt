@@ -1,4 +1,4 @@
-# Optional. lunagui.py imports this inside a try/except, so the window still
+# Optional. appgui.py imports this inside a try/except, so the window still
 # opens without it - you only lose the themed look.
 sv-ttk==2.6.1
 

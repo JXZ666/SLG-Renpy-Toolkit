@@ -1,5 +1,5 @@
 @echo off
-REM Builds dist\rpykit-luna.exe - one self-contained file, no Python needed.
+REM Builds dist\SLG-Renpy-Toolkit.exe - one self-contained file, no Python needed.
 REM ASCII only on purpose: cmd.exe runs .bat files through cp936 here and
 REM non-ASCII comments come out mangled.
 setlocal
@@ -21,20 +21,20 @@ python -c "import sv_ttk" >nul 2>nul || (
 
 REM Referenced by icon= in the spec, so the build fails without it. Regenerate
 REM with: python tools\make_icon.py   (that one step does need Pillow.)
-if not exist "assets\rpykit-luna.ico" (
-    echo Missing assets\rpykit-luna.ico - run: python tools\make_icon.py
+if not exist "assets\SLG-Renpy-Toolkit.ico" (
+    echo Missing assets\SLG-Renpy-Toolkit.ico - run: python tools\make_icon.py
     exit /b 1
 )
 
-REM Built from the spec, not from luna_main.py on the command line: passing the
-REM script and flags here makes PyInstaller REWRITE rpykit-luna.spec, which
+REM Built from the spec, not from app_main.py on the command line: passing the
+REM script and flags here makes PyInstaller REWRITE SLG-Renpy-Toolkit.spec, which
 REM would silently discard its icon= and any future hand edit.
 REM
 REM The spec keeps console=True on purpose - dropping a game folder onto the exe
 REM has to show its log. The GUI path hides the console itself
-REM (luna_main._hide_console).
-python -m PyInstaller --noconfirm --clean rpykit-luna.spec || exit /b 1
+REM (app_main._hide_console).
+python -m PyInstaller --noconfirm --clean SLG-Renpy-Toolkit.spec || exit /b 1
 
 echo.
-echo Built: %CD%\dist\rpykit-luna.exe
+echo Built: %CD%\dist\SLG-Renpy-Toolkit.exe
 endlocal

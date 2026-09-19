@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['luna_main.py'],
+    ['app_main.py'],
     pathex=[],
     binaries=[],
     datas=[('assets', 'assets')],
@@ -22,8 +22,8 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='rpykit-luna',
-    icon='assets/rpykit-luna.ico',
+    name='SLG-Renpy-Toolkit',
+    icon='assets/SLG-Renpy-Toolkit.ico',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

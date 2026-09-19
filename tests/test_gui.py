@@ -1,11 +1,11 @@
-"""Offline checks for the rpykit-luna window.
+"""Offline checks for the SLG-Renpy-Toolkit window.
 
 The window cannot be clicked from here, so this covers what can be asserted
 without eyes: that the layout builds at all, that a theme switch repaints the
 widgets sv-ttk does not own, and that every branch of the status logic lands on
 a colour that exists.
 
-Run:  python tests/test_lunagui.py
+Run:  python tests/test_gui.py
 """
 
 import os
@@ -16,7 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, os.pardir))
 sys.path.insert(0, ROOT)
 
-import lunagui  # noqa: E402
+import appgui  # noqa: E402
 
 # The "this is already a Ren'Py game" status branch is the only one that needs a
 # real game, and nobody cloning this repo has one. Point RPYKIT_TEST_GAME at any
@@ -39,13 +39,13 @@ def is_hex(value):
 
 
 def main():
-    check("sv_ttk is importable", lunagui.sv_ttk is not None,
+    check("sv_ttk is importable", appgui.sv_ttk is not None,
           "theme falls back to the default ttk look")
 
     root = tk.Tk()
     root.withdraw()
     try:
-        app = lunagui.App(root)
+        app = appgui.App(root)
         root.update()
 
         check("window builds", app.log is not None)
@@ -57,25 +57,25 @@ def main():
         check("it is live before a game is picked",
               "disabled" not in app.chk_skip.state())
         check("it rides into the namespace",
-              lunagui._namespace("x", skip_intro=False).skip_intro is False
-              and lunagui._namespace("x").skip_intro is True)
+              appgui._namespace("x", skip_intro=False).skip_intro is False
+              and appgui._namespace("x").skip_intro is True)
 
         # The boxes are drawn from features.CATALOG rather than from a list in
         # the layout, which is the whole point of the catalogue: a third feature
-        # must appear in the window without an edit to lunagui.py.
+        # must appear in the window without an edit to appgui.py.
         check("one card per catalogue entry",
-              sorted(app.rows) == sorted(lunagui.features.ids()), sorted(app.rows))
+              sorted(app.rows) == sorted(appgui.features.ids()), sorted(app.rows))
         check("every card is ticked the way its entry says",
               {fid: app.var_on[fid].get() for fid in app.rows}
               == {e["id"]: bool(e.get("default_on", True))
-                  for e in lunagui.features.CATALOG})
+                  for e in appgui.features.CATALOG})
         # Both spellings of the selection travel together, or the runner would
         # have to guess which one the window meant.
         check("the two spellings agree",
-              lunagui._namespace("x", feature_ids=["intro"]).features == ["intro"]
-              and lunagui._namespace("x", feature_ids=["intro"]).skip_intro is True)
+              appgui._namespace("x", feature_ids=["intro"]).features == ["intro"]
+              and appgui._namespace("x", feature_ids=["intro"]).skip_intro is True)
         check("unticking the intro wins over an explicit list",
-              lunagui._namespace("x", feature_ids=["fontfix", "intro"],
+              appgui._namespace("x", feature_ids=["fontfix", "intro"],
                                  skip_intro=False).features == ["fontfix"])
 
         # A theme switch has to reach the Text, or dark mode shows a white block.
@@ -83,7 +83,7 @@ def main():
         for theme in ("dark", "light", "dark"):
             app._apply_theme(theme)
             root.update()
-            p = lunagui._palette(root)
+            p = appgui._palette(root)
             seen.add(p["theme"])
             check("%s: palette is all hex" % theme,
                   all(is_hex(p[k]) for k in
@@ -112,7 +112,7 @@ def main():
             got = app._refresh_state()
             level = got[0] if isinstance(got, tuple) else None
             check("state %s" % (want or "real game"),
-                  level in lunagui._GLYPH, got)
+                  level in appgui._GLYPH, got)
             if want and level != want:
                 check("state %s is %s" % (want, level), False, got)
 

@@ -1,4 +1,4 @@
-"""The window rpykit-luna.exe opens when it is double-clicked.
+"""The window SLG-Renpy-Toolkit.exe opens when it is double-clicked.
 
 Nothing here makes decisions. It collects a game directory and the set of ticked
 features, hands both to cmd_fontfix, and shows what that prints - so the console
@@ -32,11 +32,12 @@ try:
 except ImportError:  # the window still works, it just looks like 1995
     sv_ttk = None
 
+import branding
 import cmd_fontfix
 import compat
 import features
 
-TITLE = "rpykit-luna  露娜汉化预飞"
+TITLE = branding.APP_NAME
 
 FOOTER = "也可以把游戏文件夹整个拖到本程序的图标上，跳过这个窗口直接处理。"
 
@@ -255,7 +256,7 @@ class App:
         self.root.title(TITLE)
         self.root.minsize(720, 600)
         try:
-            self.root.iconbitmap(cmd_fontfix._asset("rpykit-luna.ico"))
+            self.root.iconbitmap(cmd_fontfix._asset(branding.ICON_NAME))
         except Exception:  # noqa: BLE001 - a missing icon must not stop the window
             pass
 
@@ -269,8 +270,8 @@ class App:
         # --- header ---
         head = ttk.Frame(body)
         head.pack(fill="x")
-        ttk.Label(head, text="露娜汉化预飞", style="Title.TLabel").pack(side="left")
-        ttk.Label(head, text="rpykit-luna", style="Sub.TLabel").pack(
+        ttk.Label(head, text=branding.APP_NAME, style="Title.TLabel").pack(side="left")
+        ttk.Label(head, text=branding.APP_SLUG, style="Sub.TLabel").pack(
             side="left", padx=(10, 0), pady=(8, 0))
         self.btn_theme = ttk.Button(head, width=6, style="Toolbutton",
                                     command=self._toggle_theme)
