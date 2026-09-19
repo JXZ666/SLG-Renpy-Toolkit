@@ -126,10 +126,24 @@ def record_file(work_dir, game_dir, rel_path, source):
     save_manifest(work_dir, m)
 
 
-def record_quarantine(work_dir, game_dir, rel_path, stored_as):
+def record_quarantine(work_dir, game_dir, rel_path, stored_as, source=None):
+    """Record a file moved out of the game directory.
+
+    `source` says who moved it, because not every quarantine comes back: fontfix
+    moves a rival splashscreen override aside during install and restores it on
+    --revert, while init's leftovers are swept away for good. Entries without a
+    source are never restored.
+    """
     m = load_manifest(work_dir)
     m["game_dir"] = game_dir
     q = m.setdefault("quarantined", [])
-    if not any(e["path"] == rel_path for e in q):
-        q.append({"path": rel_path, "stored_as": stored_as})
+    entry = {"path": rel_path, "stored_as": stored_as}
+    if source:
+        entry["source"] = source
+    for i, e in enumerate(q):
+        if e["path"] == rel_path:
+            q[i] = entry
+            break
+    else:
+        q.append(entry)
     save_manifest(work_dir, m)
