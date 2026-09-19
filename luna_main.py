@@ -11,9 +11,17 @@ FontGroup that keeps the original face for Latin and draws CJK with an
 installed CJK font. It does not touch the language, the game's tl/, or any
 archive, and it is fully reversible.
 
+While it is there it also redirects the game's splashscreen to a no-op, so the
+opening logos stop being part of every launch.
+
   double-click the exe        -> a window
   drop a game folder onto it  -> runs headless and exits
   rpykit-luna <dir> --revert  -> puts the game back
+
+Every change is a feature listed in features.py, and the two ways of choosing
+them agree: `--features a,b` says which, and `--no-skip-intro` is the older
+single switch that still works. `--revert` ignores both - undo removes
+everything this tool ever wrote.
 
 Only cmd_fontfix is imported, so a frozen build stays small and cannot be
 taken down by the heavier dependencies the translate pipeline needs.
@@ -35,6 +43,40 @@ for _stream in (sys.stdout, sys.stderr):
 import argparse  # noqa: E402
 
 import cmd_fontfix  # noqa: E402
+import features  # noqa: E402
+
+
+def _split(value):
+    if not value:
+        return []
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _selection(args):
+    """Which features this command line asked for, as ids in catalogue order.
+
+    Three spellings meet here and must not fight: --features says what to
+    install, --no-features subtracts from that, and --no-skip-intro is the
+    single switch from before there was a catalogue. Unknown ids are reported
+    and dropped rather than raising - a typo should not stop the run, and the
+    runner would drop them anyway.
+    """
+    known = features.ids()
+    if args.features is None:
+        chosen = features.default_selection()
+    else:
+        chosen = [fid for fid in known if fid in _split(args.features)]
+
+    drop = _split(args.no_features)
+    if not args.skip_intro:
+        drop.append("intro")
+    out = [fid for fid in chosen if fid not in drop]
+
+    unknown = [fid for fid in _split(args.features) + drop if fid not in known]
+    if unknown:
+        print("!! unknown feature(s) ignored: %s (known: %s)"
+              % (", ".join(sorted(set(unknown))), ", ".join(known)))
+    return out
 
 
 def _hide_console():
@@ -81,6 +123,17 @@ def main(argv=None):
                         help="print the decisions and write nothing")
     parser.add_argument("--force", action="store_true",
                         help="overwrite a file rpykit did not install")
+    parser.add_argument("--features", default=None, metavar="IDS",
+                        help="comma-separated features to install, in catalogue "
+                             "order: %s" % ", ".join(features.ids()))
+    parser.add_argument("--no-features", default=None, metavar="IDS",
+                        help="features to leave out, subtracted from the default "
+                             "set or from --features")
+    parser.add_argument("--no-skip-intro", action="store_false", dest="skip_intro",
+                        default=True,
+                        help="keep the opening logos; by default the splashscreen "
+                             "is redirected to a no-op so the game boots straight "
+                             "to the main menu")
     args = parser.parse_args(argv)
 
     if args.game_dir is None:
@@ -92,7 +145,8 @@ def main(argv=None):
     ns = argparse.Namespace(
         game_dir=args.game_dir, work=None, mode="luna",
         lang="chinesesimplified", revert=args.revert,
-        force=args.force, dry_run=args.dry_run)
+        force=args.force, dry_run=args.dry_run, skip_intro=args.skip_intro,
+        features=_selection(args))
     code = 0
     try:
         code = cmd_fontfix.run(ns) or 0

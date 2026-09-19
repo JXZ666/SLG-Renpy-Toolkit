@@ -50,6 +50,34 @@ def main():
 
         check("window builds", app.log is not None)
 
+        # The skip-the-logos box. Default on, and it has to reach the Namespace
+        # the worker thread reads - the GUI only ever reads the Tk variable on
+        # the main thread, so this is the seam worth pinning.
+        check("the skip-intro box starts ticked", app.var_skip.get() is True)
+        check("it is live before a game is picked",
+              "disabled" not in app.chk_skip.state())
+        check("it rides into the namespace",
+              lunagui._namespace("x", skip_intro=False).skip_intro is False
+              and lunagui._namespace("x").skip_intro is True)
+
+        # The boxes are drawn from features.CATALOG rather than from a list in
+        # the layout, which is the whole point of the catalogue: a third feature
+        # must appear in the window without an edit to lunagui.py.
+        check("one card per catalogue entry",
+              sorted(app.rows) == sorted(lunagui.features.ids()), sorted(app.rows))
+        check("every card is ticked the way its entry says",
+              {fid: app.var_on[fid].get() for fid in app.rows}
+              == {e["id"]: bool(e.get("default_on", True))
+                  for e in lunagui.features.CATALOG})
+        # Both spellings of the selection travel together, or the runner would
+        # have to guess which one the window meant.
+        check("the two spellings agree",
+              lunagui._namespace("x", feature_ids=["intro"]).features == ["intro"]
+              and lunagui._namespace("x", feature_ids=["intro"]).skip_intro is True)
+        check("unticking the intro wins over an explicit list",
+              lunagui._namespace("x", feature_ids=["fontfix", "intro"],
+                                 skip_intro=False).features == ["fontfix"])
+
         # A theme switch has to reach the Text, or dark mode shows a white block.
         seen = set()
         for theme in ("dark", "light", "dark"):

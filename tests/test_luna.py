@@ -18,6 +18,7 @@ Run:  python tests/test_luna.py
 """
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -79,11 +80,18 @@ class _Env(object):
         return False
 
 
-def run_fontfix(game_dir, revert=False, dry_run=False, force=False, mode="luna"):
+def run_fontfix(game_dir, revert=False, dry_run=False, force=False, mode="luna",
+                skip_intro=True):
     ns = argparse.Namespace(game_dir=game_dir, work=None, mode=mode,
                             lang="chinesesimplified", revert=revert,
-                            force=force, dry_run=dry_run)
+                            force=force, dry_run=dry_run, skip_intro=skip_intro)
     return cmd_fontfix.run(ns)
+
+
+def intro_text():
+    return cmd_fontfix.INTRO.substitute(
+        stamp="2026-01-01T00:00:00", game_dir="C:/games/G",
+        intro_label=cmd_fontfix.INTRO_LABEL)
 
 
 def make_game(root, with_script=False):
@@ -179,6 +187,19 @@ def main():
                 check("reports the current template", st["current"], st)
                 check("records luna mode", st["mode"] == "luna", st)
 
+                # The report outlives the run, and the two things a caller
+                # reads it for are which features it installed and what the
+                # pre-flight made of the game.
+                rep = json.load(open(os.path.join(proj.work_dir_for(game),
+                                                  "fontfix_report.json"),
+                                     encoding="utf-8"))
+                check("the report names the features it installed",
+                      rep["features"] == ["fontfix", "intro"]
+                      and rep["skip_intro"] is True, rep.get("features"))
+                check("the report carries the compatibility survey",
+                      rep["compat"]["verdict"] in ("ok", "warn", "bad")
+                      and rep["compat"]["game_dir"] == game, rep.get("compat"))
+
                 # The written shim must not read back as a font source. Its
                 # header comment names every face in the game and its body
                 # names the CJK font, so a scan that did not skip it would
@@ -235,6 +256,109 @@ def main():
                 check("refuses to overwrite it", False, "SystemExit: %s" % e)
             check("leaves the file untouched",
                   open(foreign, encoding="utf-8").read().startswith("# the player's"))
+
+        # --- the intro overlay, and the rival it displaces -------------------
+        print("skip the opening logos")
+
+        # What the generator must never produce. A plain `init python:` block
+        # loses to a hand-written zzz_* file that uses the same priority, so the
+        # block check is what keeps the override deterministic; anything past a
+        # bare `return` in the label body leaks the dynamic variables
+        # _splashscreen sets just before jumping in.
+        check("a plain `init python:` block is rejected",
+              bool(cmd_fontfix.validate_intro(
+                  intro_text().replace("init 999 python:", "init python:"))))
+        check("a label body with more than `return` is rejected",
+              bool(cmd_fontfix.validate_intro(
+                  intro_text().replace("label %s:\n    return" % cmd_fontfix.INTRO_LABEL,
+                                       "label %s:\n    return\n    return"
+                                       % cmd_fontfix.INTRO_LABEL))))
+        check("the clean template self-checks",
+              not cmd_fontfix.validate_intro(intro_text()))
+
+        g4 = make_game(os.path.join(tmp, "IntroGame"), with_script=True)
+        gdir4 = os.path.join(g4, "game")
+        rival = os.path.join(gdir4, "zzz_skip_splash.rpy")
+        with open(rival, "w", encoding="utf-8") as f:
+            f.write('init python:\n'
+                    '    config.label_overrides["splashscreen"] = "zzz_skip_splash"\n'
+                    '\nlabel zzz_skip_splash:\n    return\n')
+        with open(rival + "c", "wb") as f:
+            f.write(b"compiled")
+        # A game's own `label splashscreen:` is normal and must never be taken
+        # for a rival add-on.
+        own = os.path.join(gdir4, "7_script.rpy")
+        with open(own, "w", encoding="utf-8") as f:
+            f.write("label splashscreen:\n    return\n")
+        check("finds only the rival override",
+              cmd_fontfix.find_intro_conflicts(g4) == ["zzz_skip_splash.rpy"],
+              cmd_fontfix.find_intro_conflicts(g4))
+
+        work4 = os.path.join(tmp, "work4")
+        intro = os.path.join(gdir4, cmd_fontfix.INTRO_REL)
+        with _Env(RPYKIT_WORK=work4):
+            run_fontfix(g4, dry_run=True)
+            check("dry-run previews without moving the rival", os.path.isfile(rival))
+            check("dry-run writes no intro", not os.path.exists(intro))
+
+            run_fontfix(g4, force=True)
+            check("installs the intro", os.path.isfile(intro))
+            check("the installed intro self-checks",
+                  not cmd_fontfix.validate_intro(open(intro, encoding="utf-8").read()))
+            st = cmd_fontfix.installed_state(g4)
+            check("reports the intro as ours and current",
+                  st["intro"] and st["intro_ours"] and st["intro_current"], st)
+            check("quarantines the rival and its .rpyc",
+                  not os.path.exists(rival) and not os.path.exists(rival + "c"))
+            check("keeps a backup of the rival",
+                  os.path.isfile(os.path.join(work4, "IntroGame", "quarantine",
+                                              "zzz_skip_splash.rpy")))
+            check("leaves the game's own splashscreen label alone",
+                  os.path.isfile(own))
+
+            run_fontfix(g4, revert=True)
+            check("revert puts the rival back",
+                  os.path.isfile(rival) and os.path.isfile(rival + "c"))
+            check("revert removes the intro",
+                  not os.path.exists(intro) and not os.path.exists(intro + "c"))
+
+        # The workspace is under %LOCALAPPDATA% on C: while games habitually sit
+        # on another drive, so the quarantine move crosses a volume boundary in
+        # normal use. os.replace cannot do that at all - it raises WinError 17 -
+        # so the fallback is what has to work.
+        print("quarantine across a volume boundary")
+
+        def _exdev(*_a):
+            raise OSError(18, "Invalid cross-device link")
+
+        src = os.path.join(tmp, "rival.rpy")
+        dst = os.path.join(tmp, "other_volume", "rival.rpy")
+        with open(src, "w", encoding="utf-8") as f:
+            f.write("rival")
+        real_rename = os.rename
+        os.rename = _exdev
+        try:
+            cmd_fontfix._move_file(src, dst)
+        finally:
+            os.rename = real_rename
+        check("survives a rename that refuses to cross volumes",
+              not os.path.exists(src) and open(dst, encoding="utf-8").read() == "rival")
+
+        # Re-quarantining after the player put the rival back must overwrite the
+        # stale backup, not raise.
+        with open(src, "w", encoding="utf-8") as f:
+            f.write("rival again")
+        cmd_fontfix._move_file(src, dst)
+        check("a second quarantine replaces the stale backup",
+              open(dst, encoding="utf-8").read() == "rival again")
+
+        g5 = make_game(os.path.join(tmp, "NoIntro"), with_script=True)
+        with _Env(RPYKIT_WORK=os.path.join(tmp, "work5")):
+            run_fontfix(g5, skip_intro=False)
+            check("the box unticked writes no intro",
+                  not os.path.exists(os.path.join(g5, "game", cmd_fontfix.INTRO_REL)))
+            check("the box unticked still installs the font",
+                  os.path.isfile(os.path.join(g5, "game", cmd_fontfix.SHIM_REL)))
 
         # --- blocker 3: the entry point stays thin ---------------------------
         print("entry point")
