@@ -1,4 +1,4 @@
-"""Draw assets/rpykit-luna.ico.
+"""Draw assets/SLG-Renpy-Toolkit.ico.
 
 Build-time only, run by hand:
 
@@ -9,7 +9,7 @@ Pillow never reaches the exe. Nothing in the frozen app imports PIL, the script
 is not in hiddenimports, and it is not in datas  -  so PyInstaller's PIL hook
 never fires, because hooks only run for modules the Analysis actually reaches.
 The .ico is read by PyInstaller while it writes the PE resources and by nothing
-else. Do not import this module from luna_main.py or lunagui.py, or that stops
+else. Do not import this module from app_main.py or appgui.py, or that stops
 being true and the exe grows by the whole of Pillow.
 
 The glyph comes from assets/NotoSansSC-VF.ttf, which is already in the tree for
@@ -22,7 +22,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.normpath(os.path.join(HERE, os.pardir, "assets"))
-OUT = os.path.join(ASSETS, "rpykit-luna.ico")
+OUT = os.path.join(ASSETS, "SLG-Renpy-Toolkit.ico")
 FONT = os.path.join(ASSETS, "NotoSansSC-VF.ttf")
 
 MASTER = 256

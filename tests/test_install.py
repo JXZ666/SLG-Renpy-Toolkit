@@ -14,7 +14,7 @@ There is also one source-only convenience: a 17.8 MB font is copied on every
 install. The tests swap in a tiny stand-in, since what is being checked is the
 decision, not the bytes.
 
-Run:  python tests/test_luna.py
+Run:  python tests/test_install.py
 """
 
 import argparse
@@ -124,7 +124,7 @@ def main():
             print("  FAIL %s %s" % (label, detail))
             failures.append(label)
 
-    tmp = tempfile.mkdtemp(prefix="rpykit_luna_test_")
+    tmp = tempfile.mkdtemp(prefix="slg_renpy_test_")
     try:
         # --- blocker 4: the bundled asset ------------------------------------
         print("bundled asset")
@@ -362,8 +362,8 @@ def main():
 
         # --- blocker 3: the entry point stays thin ---------------------------
         print("entry point")
-        import luna_main  # noqa: E402
-        check("luna_main is importable", callable(luna_main.main))
+        import app_main  # noqa: E402
+        check("app_main is importable", callable(app_main.main))
         check("no translate pipeline dragged in",
               "cmd_translate" not in sys.modules and "cmd_skeleton" not in sys.modules,
               [m for m in ("cmd_translate", "cmd_skeleton") if m in sys.modules])
@@ -373,9 +373,9 @@ def main():
         g3 = make_game(os.path.join(tmp, "ArgvGame"))
         with _Env(RPYKIT_WORK=os.path.join(tmp, "work3")):
             check("a path argument runs headless and succeeds",
-                  luna_main.main([g3, "--dry-run"]) == 0)
+                  app_main.main([g3, "--dry-run"]) == 0)
             check("a non-Ren'Py path fails instead of opening a window",
-                  luna_main.main([tmp]) != 0)
+                  app_main.main([tmp]) != 0)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

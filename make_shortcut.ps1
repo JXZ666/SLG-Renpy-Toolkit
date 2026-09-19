@@ -8,7 +8,7 @@
 #
 # The target is a console build deliberately (a dropped game folder has to show
 # its log), so Windows allocates a console before any of our code runs and
-# luna_main._hide_console() can only hide it afterwards. WindowStyle 7 starts
+# app_main._hide_console() can only hide it afterwards. WindowStyle 7 starts
 # that console minimized, which turns a black rectangle flash into a brief
 # taskbar blip. If the Tk window itself ever opens minimized, set it to 1.
 
@@ -16,7 +16,7 @@
 param(
     [string] $Exe,
     [string] $Desktop = [Environment]::GetFolderPath('Desktop'),
-    [string] $Name    = 'rpykit-luna'
+    [string] $Name    = 'SLG-Renpy-Toolkit'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,7 +29,7 @@ if (-not $Exe) {
     $root = $PSScriptRoot
     if (-not $root) { $root = Split-Path -Parent $PSCommandPath }
     if (-not $root) { throw 'cannot locate the project; pass -Exe explicitly' }
-    $Exe = Join-Path $root 'dist\rpykit-luna.exe'
+    $Exe = Join-Path $root 'dist\SLG-Renpy-Toolkit.exe'
 }
 
 # Comes back empty under a redirected profile (a sandboxed shell, a service
@@ -57,7 +57,7 @@ $lnk.WorkingDirectory = Split-Path -Parent $Exe
 # The icon embedded in the exe, not a separate .ico: it survives the exe being
 # replaced by a rebuild and cannot go stale if assets\ moves.
 $lnk.IconLocation     = "$Exe,0"
-$lnk.Description      = 'rpykit-luna - install CJK fonts into a RenPy game'
+$lnk.Description      = 'SLG-Renpy-Toolkit - CJK fonts and intro skip for RenPy games'
 $lnk.WindowStyle      = 7
 $lnk.Save()
 

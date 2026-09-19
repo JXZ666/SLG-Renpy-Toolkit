@@ -1,4 +1,6 @@
-# rpykit-luna · 露娜汉化预飞
+# SLG-Renpy神奇妙妙工具 · SLG-Renpy-Toolkit
+
+> 原名 `rpykit-luna`（露娜汉化预飞）。因为已经不止「露娜 + 字体」这一件事，改名了。
 
 往 Ren'Py 游戏目录里装几个**可自由勾选、互不依赖**的小补丁。
 
@@ -11,7 +13,7 @@
 
 ## English
 
-`rpykit-luna` installs small, independently selectable patches into a Ren'Py game
+`SLG-Renpy-Toolkit` installs small, independently selectable patches into a Ren'Py game
 folder. Today there are two, and neither depends on the other:
 
 - **Font pre-flight** — fixes the "tofu boxes" (`□□□`) problem when using
@@ -27,11 +29,11 @@ Nothing is written into a game's scripts, archives, `tl/` directory or language 
 every write is recorded and fully reversible.
 
 ```
-rpykit-luna <game_folder>                       # install (default features)
-rpykit-luna <game_folder> --dry-run             # preview, write nothing
-rpykit-luna <game_folder> --revert              # undo everything it installed
-rpykit-luna <game_folder> --features intro      # only the opening-logo skip
-rpykit-luna <game_folder> --features fontfix,intro
+SLG-Renpy-Toolkit <game_folder>                       # install (default features)
+SLG-Renpy-Toolkit <game_folder> --dry-run             # preview, write nothing
+SLG-Renpy-Toolkit <game_folder> --revert              # undo everything it installed
+SLG-Renpy-Toolkit <game_folder> --features intro      # only the opening-logo skip
+SLG-Renpy-Toolkit <game_folder> --features fontfix,intro
 ```
 
 Windows binaries are attached to [Releases](../../releases). The tool itself is pure
@@ -59,7 +61,7 @@ standard library, so running from source needs no `pip install`.
 
 ### 方式一：直接用 exe（推荐，不需要装 Python）
 
-1. 到 [Releases](../../releases) 下载 `rpykit-luna.exe`。
+1. 到 [Releases](../../releases) 下载 `SLG-Renpy-Toolkit.exe`。
 2. 双击打开窗口 → 「浏览...」选游戏目录。窗口会立刻给出一份**兼容性预检**
    （可装 / 有风险 / 不适用 + 理由），每个功能卡片右侧还有一个状态小标签，
    告诉你它现在是「未安装」「已安装」还是遇到了外来文件。
@@ -78,10 +80,10 @@ standard library, so running from source needs no `pip install`.
 除 GUI 主题外无第三方依赖：
 
 ```bash
-git clone https://github.com/JXZ666/rpykit-luna.git
-cd rpykit-luna
-python luna_main.py                    # 打开窗口
-python luna_main.py "D:\Games\SomeGame"  # 直接安装
+git clone https://github.com/JXZ666/SLG-Renpy-Toolkit.git
+cd SLG-Renpy-Toolkit
+python app_main.py                    # 打开窗口
+python app_main.py "D:\Games\SomeGame"  # 直接安装
 ```
 
 ### 命令行参数
@@ -197,7 +199,7 @@ Ren'Py 8.x 的 **8.2.0 / 8.2.3 / 8.3.0 / 8.3.2 / 8.3.6 / 8.4.2 / 8.5.0** 都实�
 
 **Q：装错了怎么退回去？**
 
-点「撤销还原」，或跑 `rpykit-luna <游戏目录> --revert`。
+点「撤销还原」，或跑 `SLG-Renpy-Toolkit <游戏目录> --revert`。
 
 ## 已知限制
 
@@ -221,15 +223,15 @@ Ren'Py 8.x 的 **8.2.0 / 8.2.3 / 8.3.0 / 8.3.2 / 8.3.6 / 8.4.2 / 8.5.0** 都实�
 build_exe.bat
 ```
 
-产物在 `dist\rpykit-luna.exe`（约 23 MB，其中 17.7 MB 是内嵌的思源黑体），
+产物在 `dist\SLG-Renpy-Toolkit.exe`（约 23 MB，其中 17.7 MB 是内嵌的思源黑体），
 单文件、免 Python 环境。想要桌面快捷方式，运行 `make_shortcut.ps1`。
 
 ## 运行测试
 
 ```bash
 python tests/test_fontfix.py   # 垫片逻辑（不需要真的启动 Ren'Py）
-python tests/test_luna.py      # 冻结成 exe 后才会暴露的两个问题
-python tests/test_lunagui.py   # 窗口布局与主题切换（需要 tkinter）
+python tests/test_install.py   # 冻结成 exe 后才会暴露的两个问题
+python tests/test_gui.py       # 窗口布局与主题切换（需要 tkinter）
 python tests/test_compat.py    # 兼容性预检的判定规则（合成目录树）
 ```
 
