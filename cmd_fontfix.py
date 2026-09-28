@@ -37,11 +37,13 @@ recorded in install_manifest.json and undone by `SLG-Renpy-Toolkit --revert`.
 """
 
 import datetime
+import hashlib
 import os
 import re
 import shutil
 import string
 import sys
+import tempfile
 
 import compat
 import features
@@ -77,6 +79,7 @@ INTRO_LABEL = "zz_rpykit_intro"
 # Manifest source for a rival override this tool moved aside to make room for
 # the intro, and the only quarantine `--revert` puts back.
 QUARANTINE_INTRO = "fontfix:intro-conflict"
+QUARANTINE_REPLACED = "fontfix:replaced-collision"
 
 # Ren'Py's stock defaults. Every gui.rpy defines gui.text_font and friends from
 # these names, so they are aliased even when a scan misses the literal.
@@ -303,6 +306,72 @@ def _read_text(path):
         return ""
 
 
+def _hash_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _safe_join(root, rel):
+    """Join a manifest relative path and refuse traversal or symlink escapes."""
+    if (not isinstance(rel, str) or not rel or os.path.isabs(rel)
+            or os.path.splitdrive(rel)[0]):
+        raise FontFixError("unsafe path in install manifest: %r" % (rel,))
+    parts = rel.replace("\\", "/").split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        raise FontFixError("unsafe path in install manifest: %r" % (rel,))
+    base = os.path.realpath(os.path.abspath(root))
+    path = base
+    for part in parts:
+        path = os.path.join(path, part)
+        if os.path.islink(path):
+            raise FontFixError("manifest path crosses a symbolic link: %r" % (rel,))
+    path = os.path.realpath(path)
+    try:
+        inside = os.path.normcase(os.path.commonpath((base, path))) == os.path.normcase(base)
+    except ValueError:
+        inside = False
+    if not inside:
+        raise FontFixError("manifest path escapes its root: %r" % (rel,))
+    return path
+
+
+def _check_manifest_game(game_dir, manifest):
+    stored = manifest.get("game_dir")
+    if not stored:
+        return
+    actual_key = proj.canonical_game_dir(game_dir)
+    stored_key = proj.canonical_game_dir(stored)
+    if stored_key != actual_key:
+        raise FontFixError(
+            "install manifest belongs to a different game directory: %s" % stored)
+    stored_id = manifest.get("game_id")
+    if stored_id and stored_id != proj.game_identity(game_dir):
+        raise FontFixError("install manifest game identity does not match this directory")
+
+
+def _manifest_entries(manifest):
+    return {e.get("path"): e for e in manifest.get("files", [])
+            if isinstance(e, dict) and e.get("path")}
+
+
+def _entry_owns(path, entry, allow_legacy_marker=False):
+    if not os.path.isfile(path):
+        return False
+    if entry and "sha256" in entry:
+        if not entry.get("sha256"):
+            return False
+        try:
+            return _hash_file(path) == entry["sha256"]
+        except OSError:
+            return False
+    if entry:
+        return _is_ours(path)
+    return allow_legacy_marker and _is_ours(path)
+
+
 def _font_state(game_dir):
     """What the font feature has already put into `game_dir`.
 
@@ -370,8 +439,8 @@ def _archive_paths(game_dir):
 
 # An add-on file that redirects the splashscreen the same way this tool does.
 # Deliberately narrow: it must touch config.label_overrides, because a game's
-# own `label splashscreen:` is a completely normal thing to find (Game-D and
-# Game-E both define one) and must never be mistaken for a rival
+# own `label splashscreen:` is a completely normal thing to find (most of the
+# sampled games define one) and must never be mistaken for a rival
 # add-on. The dictionary-literal form is checked separately because
 # `label_overrides = {"splashscreen": ...}` has no bracket to anchor on.
 _RE_OVERRIDE_SET = re.compile(
@@ -680,10 +749,40 @@ def _write(path, text):
     d = os.path.dirname(path)
     if d:
         os.makedirs(d, exist_ok=True)
-    tmp = path + ".part"
-    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".",
+                               suffix=".part", dir=d or None)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _copy_atomic(src, dst):
+    d = os.path.dirname(dst)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(dst) + ".",
+                               suffix=".part", dir=d or None)
+    os.close(fd)
+    try:
+        shutil.copy2(src, tmp)
+        with open(tmp, "r+b") as f:
+            os.fsync(f.fileno())
+        os.replace(tmp, dst)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _move_file(src, dst):
@@ -698,9 +797,28 @@ def _move_file(src, dst):
     d = os.path.dirname(dst)
     if d:
         os.makedirs(d, exist_ok=True)
-    if os.path.exists(dst):
-        os.remove(dst)
-    shutil.move(src, dst)
+    try:
+        os.replace(src, dst)
+        return
+    except OSError as e:
+        # Windows reports cross-volume moves as WinError 17. For other errors,
+        # a copy fallback is still safe because source is unlinked only after
+        # the destination has been fully copied and atomically replaced.
+        if getattr(e, "winerror", None) not in (17, 18) and e.errno not in (18, 17):
+            raise
+    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(dst) + ".",
+                               suffix=".part", dir=d or None)
+    os.close(fd)
+    try:
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dst)
+        os.remove(src)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _quarantine_intro_conflicts(args, game_dir, work):
@@ -729,30 +847,64 @@ def _quarantine_intro_conflicts(args, game_dir, work):
             print("[S6] dry-run: would quarantine game/%s (and its .rpyc if any)" % name)
             continue
         for rel in (name, name + "c"):
-            src = os.path.join(game_dir, "game", rel)
+            src = _safe_join(game_dir, "game/" + rel)
             if not os.path.isfile(src):
                 continue
-            _move_file(src, os.path.join(qdir, rel))
+            stored_as = rel.replace(os.sep, "/")
+            _move_file(src, _safe_join(qdir, stored_as))
             proj.record_quarantine(work, game_dir, "game/" + rel, rel,
                                    source=QUARANTINE_INTRO)
             print("[S6] quarantine: game/%s -> quarantine/%s" % (rel, rel))
 
 
-def _remove_pair(game_dir, rel):
-    """Delete a generated .rpy and the .rpyc Ren'Py compiled from it.
+def _remove_owned(game_dir, work, manifest, rel):
+    """Remove a recorded tool file, and its compiled twin only with proof.
 
-    Both halves or neither: Ren'Py loads a leftover .rpyc exactly as happily as
-    a .rpy, so removing only the source leaves the change in place and makes
-    --revert look like it did nothing. Every feature reverts through here so
-    that none of them can forget the compiled half.
+    Ren'Py's .rpyc is derivative output. It is safe to delete only while the
+    source beside it still matches the tool's recorded bytes.
     """
+    entries = _manifest_entries(manifest)
+    source = _safe_join(game_dir, rel)
+    entry = entries.get(rel)
+    manifest_exists = os.path.isfile(proj.manifest_path(work))
+    legacy_fallback = not manifest_exists
     out = []
-    for candidate in (rel, rel + "c"):
-        full = os.path.join(game_dir, *candidate.split("/"))
-        if os.path.isfile(full):
-            os.remove(full)
-            out.append(candidate)
+    if not os.path.isfile(source):
+        compiled = _safe_join(game_dir, rel + "c")
+        if os.path.isfile(compiled):
+            print("[S6] note   : kept %s because its source script is missing" % (rel + "c"))
+        return out
+
+    owned = _entry_owns(source, entry, allow_legacy_marker=legacy_fallback)
+    if not owned:
+        print("[S6] note   : kept %s because it no longer matches the installed version" % rel)
+        compiled = _safe_join(game_dir, rel + "c")
+        if os.path.isfile(compiled):
+            print("[S6] note   : kept %s because its source script was changed" % (rel + "c"))
+        return out
+
+    os.remove(source)
+    out.append(rel)
+    compiled = _safe_join(game_dir, rel + "c")
+    if os.path.isfile(compiled):
+        os.remove(compiled)
+        out.append(rel + "c")
     return out
+
+
+def _remove_owned_file(game_dir, work, manifest, rel):
+    """Remove a recorded non-script artifact only while its hash still matches."""
+    entries = _manifest_entries(manifest)
+    full = _safe_join(game_dir, rel)
+    entry = entries.get(rel)
+    manifest_exists = os.path.isfile(proj.manifest_path(work))
+    if not os.path.isfile(full):
+        return []
+    if not _entry_owns(full, entry, allow_legacy_marker=not manifest_exists):
+        print("[S6] note   : kept %s because it no longer matches the installed version" % rel)
+        return []
+    os.remove(full)
+    return [rel]
 
 
 def _guard_foreign(args, game_dir, work, targets):
@@ -764,10 +916,15 @@ def _guard_foreign(args, game_dir, work, targets):
     rather than lost.
     """
     manifest = proj.load_manifest(work)
-    ours = {e["path"] for e in manifest.get("files", [])}
+    _check_manifest_game(game_dir, manifest)
+    entries = _manifest_entries(manifest)
     for rel in targets:
-        full = os.path.join(game_dir, *rel.split("/"))
-        if not os.path.exists(full) or rel in ours or _is_ours(full):
+        full = _safe_join(game_dir, rel)
+        if not os.path.exists(full):
+            continue
+        entry = entries.get(rel)
+        manifest_exists = os.path.isfile(proj.manifest_path(work))
+        if _entry_owns(full, entry, allow_legacy_marker=not manifest_exists):
             continue
         if not args.force:
             # A preview reports the clash instead of dying on it, so the window's
@@ -783,8 +940,12 @@ def _guard_foreign(args, game_dir, work, targets):
                   % (rel, os.path.basename(rel)))
             continue
         qdir = proj.ensure_dir(os.path.join(work, "quarantine"))
-        shutil.copy2(full, os.path.join(qdir, os.path.basename(rel)))
-        print("[S6] quarantine: %s -> quarantine/%s" % (rel, os.path.basename(rel)))
+        stored = os.path.basename(rel)
+        qpath = _safe_join(qdir, stored)
+        _copy_atomic(full, qpath)
+        proj.record_quarantine(work, game_dir, rel, stored,
+                               source=QUARANTINE_REPLACED)
+        print("[S6] quarantine: %s -> quarantine/%s" % (rel, stored))
 
 
 # --- the features themselves ----------------------------------------------
@@ -824,7 +985,7 @@ def _prepare_font(args, game_dir, work, ctx):
         if aliased:
             font_path = os.path.join(game_dir, "game", *GAME_FONT_REL.split("/"))
             os.makedirs(os.path.dirname(font_path), exist_ok=True)
-            shutil.copy2(ASSET_FONT, font_path)
+            _copy_atomic(ASSET_FONT, font_path)
             proj.record_file(work, game_dir, "game/" + GAME_FONT_REL,
                              "fontfix:cjk-font")
             print("[S6] wrote  : game/%s (%.1f MB)"
@@ -841,8 +1002,9 @@ def _prepare_font(args, game_dir, work, ctx):
 
 
 def _revert_font(game_dir, work, manifest):
-    removed = _remove_pair(game_dir, "game/" + SHIM_REL)
-    removed += _remove_pair(game_dir, "game/" + GAME_FONT_REL)
+    removed = _remove_owned(game_dir, work, manifest, "game/" + SHIM_REL)
+    removed += _remove_owned_file(game_dir, work, manifest,
+                                  "game/" + GAME_FONT_REL)
     # Only this feature creates game/localization/, so only this feature tidies
     # it away - and only when nothing else has since put something in it.
     locdir = os.path.join(game_dir, "game", "localization")
@@ -877,8 +1039,8 @@ def _prepare_intro(args, game_dir, work, ctx):
 
 
 def _revert_intro(game_dir, work, manifest):
-    removed = _remove_pair(game_dir, "game/" + INTRO_REL)
-    return removed, _restore_intro_quarantine(game_dir, work, manifest)
+    removed = _remove_owned(game_dir, work, manifest, "game/" + INTRO_REL)
+    return removed, []
 
 
 class _Feature(object):
@@ -913,7 +1075,6 @@ def install(args, game_dir, work, ctx):
     targets = []
     for fid in selected:
         targets += _FEATURES[fid].targets(game_dir)
-    _guard_foreign(args, game_dir, work, targets)
 
     plans, problems = [], []
     for fid in selected:
@@ -925,31 +1086,98 @@ def install(args, game_dir, work, ctx):
             print("[S6] !! %s" % p)
         raise FontFixError("generated files failed self-check; nothing written")
     if args.dry_run:
+        _guard_foreign(args, game_dir, work, targets)
         return
-    for plan in plans:
-        plan["apply"]()
+
+    manifest = proj.load_manifest(work)
+    _check_manifest_game(game_dir, manifest)
+    game_paths = set(_safe_join(game_dir, rel) for rel in targets)
+    if "intro" in selected:
+        for name in find_intro_conflicts(game_dir):
+            game_paths.add(_safe_join(game_dir, "game/" + name))
+            game_paths.add(_safe_join(game_dir, "game/" + name + "c"))
+    had_localization = os.path.isdir(os.path.join(game_dir, "game", "localization"))
+    snapshot = tempfile.mkdtemp(prefix="rpykit-install-")
+    files_backup = os.path.join(snapshot, "files")
+    os.makedirs(files_backup)
+    before = {}
+    for index, path in enumerate(sorted(game_paths)):
+        if os.path.isfile(path):
+            backup = os.path.join(files_backup, str(index))
+            shutil.copy2(path, backup)
+            before[path] = backup
+        else:
+            before[path] = None
+    manifest_file = proj.manifest_path(work)
+    manifest_backup = os.path.join(snapshot, "manifest.json")
+    had_manifest = os.path.isfile(manifest_file)
+    if had_manifest:
+        shutil.copy2(manifest_file, manifest_backup)
+    qdir = os.path.join(work, "quarantine")
+    qbackup = os.path.join(snapshot, "quarantine")
+    had_quarantine = os.path.isdir(qdir)
+    if had_quarantine:
+        shutil.copytree(qdir, qbackup)
+
+    try:
+        _guard_foreign(args, game_dir, work, targets)
+        for plan in plans:
+            plan["apply"]()
+    except Exception:
+        # Restore all game outputs and the ownership ledger together. This also
+        # undoes quarantine moves if a later feature or manifest write fails.
+        for path, backup in before.items():
+            if backup and os.path.isfile(backup):
+                _copy_atomic(backup, path)
+            elif os.path.exists(path):
+                os.remove(path)
+        if had_manifest:
+            _copy_atomic(manifest_backup, manifest_file)
+        elif os.path.exists(manifest_file):
+            os.remove(manifest_file)
+        if os.path.isdir(qdir):
+            shutil.rmtree(qdir)
+        if had_quarantine:
+            shutil.copytree(qbackup, qdir)
+        locdir = os.path.join(game_dir, "game", "localization")
+        if not had_localization and os.path.isdir(locdir) and not os.listdir(locdir):
+            os.rmdir(locdir)
+        raise
+    finally:
+        shutil.rmtree(snapshot, ignore_errors=True)
 
 
-def _restore_intro_quarantine(game_dir, work, manifest):
-    """Put a rival override quarantined by install() back where it was.
+def _restore_quarantine_source(game_dir, work, manifest, wanted_source):
+    """Restore one recorded quarantine class after all tool files are removed.
 
-    Anything without `source == QUARANTINE_INTRO` is left alone: init sweeps
-    leftovers away for good, and only this feature promises the file back.
+    Quarantine content is verified before restoring. This function is called
+    once for intro conflicts and once for forced collisions after every feature
+    has removed its own output.
     """
     qdir = os.path.join(work, "quarantine")
     kept, restored = [], []
     for e in manifest.get("quarantined", []):
-        if e.get("source") != QUARANTINE_INTRO:
+        if e.get("source") != wanted_source:
             kept.append(e)
             continue
         stored = e.get("stored_as") or ""
-        src = os.path.join(qdir, stored)
-        dest = os.path.join(game_dir, *e.get("path", "").split("/"))
+        src = _safe_join(qdir, stored)
+        dest = _safe_join(game_dir, e.get("path", ""))
         if not os.path.isfile(src):
+            continue
+        expected = e.get("sha256")
+        if not expected and manifest.get("version", 1) >= 2:
+            print("[S6] note   : kept quarantine/%s because its hash is missing" % stored)
+            kept.append(e)
+            continue
+        if expected and _hash_file(src) != expected:
+            print("[S6] note   : kept quarantine/%s because its contents changed" % stored)
+            kept.append(e)
             continue
         if os.path.exists(dest):
             print("[S6] note   : %s is already back; copy kept at quarantine/%s"
                   % (e["path"], stored))
+            kept.append(e)
             continue
         _move_file(src, dest)
         restored.append(e["path"])
@@ -959,6 +1187,7 @@ def _restore_intro_quarantine(game_dir, work, manifest):
 
 def revert(game_dir, work):
     manifest = proj.load_manifest(work)
+    _check_manifest_game(game_dir, manifest)
 
     # Every feature, not just the selected ones: one run may have installed the
     # fonts and a later one may have ticked only the intro, and --revert is the
@@ -968,9 +1197,14 @@ def revert(game_dir, work):
         feat_removed, feat_restored = _FEATURES[fid].revert(game_dir, work, manifest)
         removed += feat_removed
         restored += feat_restored
+    restored += _restore_quarantine_source(
+        game_dir, work, manifest, QUARANTINE_INTRO)
+    restored += _restore_quarantine_source(
+        game_dir, work, manifest, QUARANTINE_REPLACED)
 
+    removed_set = set(removed)
     manifest["files"] = [e for e in manifest.get("files", [])
-                         if not e.get("source", "").startswith("fontfix:")]
+                         if e.get("path") not in removed_set]
     proj.save_manifest(work, manifest)
 
     for rel in removed:
@@ -991,10 +1225,11 @@ def run(args):
     if not os.path.isdir(os.path.join(game_dir, "game")):
         raise SystemExit("no game/ subdir - is this a Ren'Py distribution? %s" % game_dir)
 
-    work = proj.ensure_dir(args.work or proj.work_dir_for(game_dir))
-
     print("[S6] game   : %s" % game_dir)
     if args.revert:
+        work = args.work or proj.work_dir_for(game_dir)
+        manifest = proj.load_manifest(work)
+        _check_manifest_game(game_dir, manifest)
         revert(game_dir, work)
         return 0
 
@@ -1013,6 +1248,29 @@ def run(args):
         print("[S6]          %s" % reason)
     if survey["verdict"] == "bad":
         raise SystemExit("not a Ren'Py distribution: %s" % game_dir)
+
+    support = survey.get("feature_support", {})
+    unsupported = [fid for fid in selected
+                   if not support.get(fid, {}).get("supported", False)]
+    if unsupported:
+        details = []
+        for fid in unsupported:
+            reasons = support.get(fid, {}).get("reasons", [])
+            details.append("%s: %s" % (fid, "; ".join(reasons) or "API unknown"))
+        usable = [fid for fid in features.ids()
+                  if fid not in unsupported
+                  and support.get(fid, {}).get("supported", False)]
+        suggestion = ("Retry with --features %s to install only the supported feature."
+                      % ",".join(usable) if usable else
+                      "Choose a supported feature after reviewing the API report.")
+        raise FontFixError("selected feature is unsupported; no files were changed. %s %s"
+                           % (" | ".join(details), suggestion))
+
+    work = args.work or proj.work_dir_for(game_dir)
+    manifest = proj.load_manifest(work)
+    _check_manifest_game(game_dir, manifest)
+    if not args.dry_run:
+        work = proj.ensure_dir(work)
 
     print("[S6] work   : %s" % work)
     print("[S6] mode   : %s%s" % (
@@ -1056,19 +1314,20 @@ def run(args):
            "stamp": datetime.datetime.now().isoformat(timespec="seconds")}
     install(args, game_dir, work, ctx)
 
-    proj.write_json(os.path.join(work, "fontfix_report.json"), {
-        "game_dir": game_dir,
-        "mode": args.mode,
-        "installed": not args.dry_run,
-        "cjk_font": GAME_FONT_REL,
-        "shim": "game/" + SHIM_REL,
-        "intro": "game/" + INTRO_REL if "intro" in selected else None,
-        "features": selected,
-        "skip_intro": "intro" in selected,
-        "compat": survey,
-        "decisions": decisions,
-        "refs": report["refs"],
-    })
+    if not args.dry_run:
+        proj.write_json(os.path.join(work, "fontfix_report.json"), {
+            "game_dir": game_dir,
+            "mode": args.mode,
+            "installed": True,
+            "cjk_font": GAME_FONT_REL,
+            "shim": "game/" + SHIM_REL,
+            "intro": "game/" + INTRO_REL if "intro" in selected else None,
+            "features": selected,
+            "skip_intro": "intro" in selected,
+            "compat": survey,
+            "decisions": decisions,
+            "refs": report["refs"],
+        })
 
     print("[S6] OK - start the game to verify; `SLG-Renpy-Toolkit --revert` undoes it")
     return 0

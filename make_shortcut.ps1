@@ -6,11 +6,7 @@
 # file carries a UTF-8 BOM, and this project's path contains CJK. $PSScriptRoot
 # supplies that path at run time, so no non-ASCII byte has to be written here.
 #
-# The target is a console build deliberately (a dropped game folder has to show
-# its log), so Windows allocates a console before any of our code runs and
-# app_main._hide_console() can only hide it afterwards. WindowStyle 7 starts
-# that console minimized, which turns a black rectangle flash into a brief
-# taskbar blip. If the Tk window itself ever opens minimized, set it to 1.
+# The GUI build has no console subsystem. Start its actual window normally.
 
 [CmdletBinding()]
 param(
@@ -29,7 +25,12 @@ if (-not $Exe) {
     $root = $PSScriptRoot
     if (-not $root) { $root = Split-Path -Parent $PSCommandPath }
     if (-not $root) { throw 'cannot locate the project; pass -Exe explicitly' }
-    $Exe = Join-Path $root 'dist\SLG-Renpy-Toolkit.exe'
+    $versionLine = Get-Content -LiteralPath (Join-Path $root 'branding.py') |
+        Where-Object { $_ -match '^APP_VERSION\s*=\s*"([^"]+)"\s*$' } |
+        Select-Object -First 1
+    if (-not $versionLine) { throw 'cannot read APP_VERSION from branding.py' }
+    $version = [regex]::Match($versionLine, '^APP_VERSION\s*=\s*"([^"]+)"\s*$').Groups[1].Value
+    $Exe = Join-Path $root ("release\{0}\SLG-Renpy-Toolkit.exe" -f $version)
 }
 
 # Comes back empty under a redirected profile (a sandboxed shell, a service
@@ -58,7 +59,7 @@ $lnk.WorkingDirectory = Split-Path -Parent $Exe
 # replaced by a rebuild and cannot go stale if assets\ moves.
 $lnk.IconLocation     = "$Exe,0"
 $lnk.Description      = 'SLG-Renpy-Toolkit - CJK fonts and intro skip for RenPy games'
-$lnk.WindowStyle      = 7
+$lnk.WindowStyle      = 1
 $lnk.Save()
 
 # Read it back. A silently mis-written .lnk is worse than a loud failure.

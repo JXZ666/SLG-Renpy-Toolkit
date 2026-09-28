@@ -1,6 +1,7 @@
 # Build output
 build/
 dist/
+release/
 *.spec.bak
 
 # Python

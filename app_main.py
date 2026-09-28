@@ -14,9 +14,10 @@ archive, and it is fully reversible.
 While it is there it also redirects the game's splashscreen to a no-op, so the
 opening logos stop being part of every launch.
 
-  double-click the exe        -> a window
-  drop a game folder onto it  -> runs headless and exits
-  SLG-Renpy-Toolkit <dir> --revert  -> puts the game back
+  SLG-Renpy-Toolkit.exe       -> the GUI (built from app_window.py)
+  SLG-Renpy-Toolkit-CLI.exe   -> command-line operations
+  drop a game folder onto the GUI exe -> opens the GUI with that folder selected
+  SLG-Renpy-Toolkit-CLI <dir> --revert -> puts the game back
 
 Every change is a feature listed in features.py, and the two ways of choosing
 them agree: `--features a,b` says which, and `--no-skip-intro` is the older
@@ -80,22 +81,6 @@ def _selection(args):
     return out
 
 
-def _hide_console():
-    """Drops the console window on the GUI path.
-
-    The exe is built as a console application on purpose - that is what makes
-    a dragged folder show its log. Double-clicking should not leave a stray
-    black window behind, so hide it once we know we are opening the GUI.
-    """
-    try:
-        import ctypes
-        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
-        if hwnd:
-            ctypes.windll.user32.ShowWindow(hwnd, 0)
-    except Exception:  # noqa: BLE001 - cosmetic only, never fatal
-        pass
-
-
 def _pause_on_error(code):
     """Keeps the console open long enough to read a failure.
 
@@ -116,6 +101,8 @@ def main(argv=None):
         prog=branding.APP_SLUG,
         description="Install CJK fonts into a Ren'Py game so LunaTranslator's "
                     "text renders as Chinese instead of tofu.")
+    parser.add_argument("--version", action="version",
+                        version="%(prog)s " + branding.APP_VERSION)
     parser.add_argument("game_dir", nargs="?", default=None,
                         help="game root, the directory holding game/ and renpy/")
     parser.add_argument("--revert", action="store_true",
@@ -138,9 +125,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     if args.game_dir is None:
-        _hide_console()
-        import appgui
-        appgui.main()
+        parser.print_help()
         return 0
 
     ns = argparse.Namespace(

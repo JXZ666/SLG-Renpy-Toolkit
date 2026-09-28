@@ -239,6 +239,79 @@ def _collisions(game_dir):
     return out
 
 
+def _api_assignment(path, name):
+    """Probe a built-in config variable without importing the game engine.
+
+    ``True`` means its source declaration was found, ``False`` means the
+    readable config module does not declare it, and ``None`` means unknown.
+    Ren'Py's config variables are declared in renpy/config.py; treating a
+    missing or unreadable module as support would recreate the startup crash
+    this pre-flight is meant to prevent.
+    """
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return None
+    if not text:
+        return None
+    return bool(re.search(r"^[ \t]*%s[ \t]*=" % re.escape(name), text, re.M))
+
+
+def _font_group_add(game_dir):
+    """Whether the shipped source has the FontGroup.add API we call."""
+    path = os.path.join(game_dir, "renpy", "text", "font.py")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return None
+    if not text:
+        return None
+    cls = re.search(r"^class[ \t]+FontGroup\b[^\n]*:\s*$", text, re.M)
+    if not cls:
+        return False
+    tail = text[cls.end():]
+    next_class = re.search(r"^class[ \t]+", tail, re.M)
+    body = tail[:next_class.start()] if next_class else tail
+    return bool(re.search(
+        r"^[ \t]+def[ \t]+add\([ \t]*self[ \t]*,[ \t]*font[ \t]*,[ \t]*"
+        r"start[ \t]*,[ \t]*end[ \t]*(?:,|\))", body, re.M))
+
+
+def _feature_support(game_dir):
+    config = os.path.join(game_dir, "renpy", "config.py")
+    font_map = _api_assignment(config, "font_name_map")
+    label_overrides = _api_assignment(config, "label_overrides")
+    font_group = _font_group_add(game_dir)
+
+    font_reasons = []
+    if font_map is not True:
+        font_reasons.append(
+            "Ren'Py config.font_name_map is %s in renpy/config.py; fontfix "
+            "cannot install safely." % ("missing" if font_map is False else "unknown"))
+    if font_group is not True:
+        font_reasons.append(
+            "Ren'Py FontGroup.add(font, start, end) is %s in "
+            "renpy/text/font.py." % ("missing" if font_group is False else "unknown"))
+
+    intro_reasons = []
+    if label_overrides is not True:
+        intro_reasons.append(
+            "Ren'Py config.label_overrides is %s in renpy/config.py; intro "
+            "cannot install safely." %
+            ("missing" if label_overrides is False else "unknown"))
+
+    return {
+        "fontfix": {"supported": not font_reasons, "reasons": font_reasons},
+        "intro": {"supported": not intro_reasons, "reasons": intro_reasons},
+    }
+
+
 def survey(game_dir, quick=False):
     """Everything the tool knows about a game before it writes anything.
 
@@ -261,6 +334,12 @@ def survey(game_dir, quick=False):
         "sources": {},
         "splash": {},
         "collisions": [],
+        "feature_support": {
+            "fontfix": {"supported": False,
+                        "reasons": ["Ren'Py APIs could not be inspected."]},
+            "intro": {"supported": False,
+                      "reasons": ["Ren'Py APIs could not be inspected."]},
+        },
     }
     if not os.path.isdir(gdir):
         out["reasons"].append("没有 game/ 子目录，这不是一个 Ren'Py 游戏根目录。")
@@ -275,6 +354,7 @@ def survey(game_dir, quick=False):
     out["sources"] = _sources(game_dir, quick)
     out["splash"] = _splash(game_dir)
     out["collisions"] = _collisions(game_dir)
+    out["feature_support"] = _feature_support(game_dir)
 
     if not os.path.isdir(os.path.join(game_dir, "renpy")) and not lib["names"]:
         out["reasons"].append("既没有 renpy/ 也没有 lib/，不像是一个 Ren'Py 发行版。")

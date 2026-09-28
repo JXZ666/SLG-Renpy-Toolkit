@@ -16,3 +16,4 @@ filename, a repository or a command line has to use instead.
 APP_NAME = "SLG-Renpy神奇妙妙工具"
 APP_SLUG = "SLG-Renpy-Toolkit"
 ICON_NAME = APP_SLUG + ".ico"
+APP_VERSION = "1.0.0"

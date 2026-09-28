@@ -30,8 +30,8 @@ sys.path.insert(0, ROOT)
 import cmd_fontfix  # noqa: E402
 import compat  # noqa: E402
 
-REAL_GAMES = os.environ.get(
-    "RPYKIT_GAMES_DIR", r"<本地测试游戏目录>")
+REAL_GAMES = os.path.expanduser(
+    os.environ.get("RPYKIT_GAMES_DIR", "~/games"))
 
 
 def _w(path, text):
@@ -44,12 +44,27 @@ def _w(path, text):
 
 def make(root, py=3, arch=("x86_64",), script_version="(8, 3, 0)",
          vc_version=None, init_tuple=None, rpa=0, rpy=(), rpyc=(),
-         renpy_dir=True):
+         renpy_dir=True, font_map=True, label_overrides=True,
+         font_group=True):
     """A plausible Ren'Py distribution skeleton, assembled to order."""
     os.makedirs(os.path.join(root, "game"), exist_ok=True)
     if renpy_dir:
         os.makedirs(os.path.join(root, "renpy", "common"), exist_ok=True)
         _w(os.path.join(root, "renpy", "__init__.py"), "# engine\n")
+        config = []
+        if font_map:
+            config.append("font_name_map = {}\n")
+        if label_overrides:
+            config.append("label_overrides = {}\n")
+        _w(os.path.join(root, "renpy", "config.py"), "".join(config))
+        font_path = os.path.join(root, "renpy", "text", "font.py")
+        if font_group:
+            _w(font_path,
+               "class FontGroup(object):\n"
+               "    def add(self, font, start, end, target=None):\n"
+               "        pass\n")
+        else:
+            _w(font_path, "# readable source, but the API is absent\n")
     if script_version is not None:
         _w(os.path.join(root, "game", "script_version.txt"), script_version)
     if vc_version is not None:
@@ -111,17 +126,24 @@ def main():
         check("py2 warning says the path is untested",
               any("py2" in r or "Python 2" in r for r in s["reasons"]),
               s["reasons"])
+        check("font APIs present independently report both features supported",
+              s["feature_support"]["fontfix"]["supported"]
+              and s["feature_support"]["intro"]["supported"],
+              s["feature_support"])
 
         g = make(p("py3"), script_version="(8, 3, 0)", rpy=("script.rpy",))
         s = compat.survey(g)
         check("py3 is clean", s["verdict"] == "ok", s["reasons"])
+        check("default fixture supports both features",
+              all(x["supported"] for x in s["feature_support"].values()),
+              s["feature_support"])
         check("py3 label is 可装", s["label"] == "可装", s["label"])
         check("loose sources are counted, not called packed",
               s["sources"]["loose_rpy"] == 1
               and not s["sources"]["packed_only"], s["sources"])
 
-        # Game-B ships no script_version.txt at all; Ren'Py 8's vc_version.py
-        # spells the version as a 4-part string.
+        # A game that ships no script_version.txt at all; Ren'Py 8's
+        # vc_version.py spells the version as a 4-part string.
         g = make(p("vc8"), script_version=None, rpy=("script.rpy",),
                  vc_version="branch = 'master'\nofficial = True\n"
                             "version = '8.3.0.24082114'\n"
@@ -166,6 +188,36 @@ def main():
               s["sources"]["unsupported_rpa"] == ["archive0.rpa"], s["sources"])
         check("an unreadable archive warns",
               any("RPA-3.0" in r for r in s["reasons"]), s["reasons"])
+
+        # Feature APIs are probed independently from the global Ren'Py verdict.
+        print("feature API compatibility")
+        g = make(p("missing-font-api"), font_map=False,
+                 label_overrides=True, font_group=True)
+        s = compat.survey(g)
+        check("missing font_name_map disables only fontfix",
+              not s["feature_support"]["fontfix"]["supported"]
+              and s["feature_support"]["intro"]["supported"],
+              s["feature_support"])
+        check("missing font map does not change distribution verdict",
+              s["verdict"] != "bad", s["verdict"])
+
+        g = make(p("missing-fontgroup"), font_map=True,
+                 label_overrides=True, font_group=False)
+        s = compat.survey(g)
+        check("missing FontGroup independently disables fontfix",
+              not s["feature_support"]["fontfix"]["supported"]
+              and s["feature_support"]["intro"]["supported"],
+              s["feature_support"])
+
+        g = make(p("unknown-config"))
+        os.remove(os.path.join(g, "renpy", "config.py"))
+        s = compat.survey(g)
+        check("unreadable or absent config source is unknown and unsupported",
+              not s["feature_support"]["fontfix"]["supported"]
+              and not s["feature_support"]["intro"]["supported"]
+              and any("unknown" in r for x in s["feature_support"].values()
+                      for r in x["reasons"]),
+              s["feature_support"])
 
         # --- the tool's own leftovers are not the game's ---------------------
         print("tool leftovers")

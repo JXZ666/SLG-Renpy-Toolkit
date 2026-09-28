@@ -1,6 +1,4 @@
-# Optional. appgui.py imports this inside a try/except, so the window still
-# opens without it - you only lose the themed look.
-sv-ttk==2.6.1
-
-# Not listed above: the tool itself is pure standard library. Pillow is needed
-# only to regenerate the icon, via tools/make_icon.py.
+# GUI runtime. Versions match the 1.0.0 Windows build.
+customtkinter==6.0.0
+darkdetect==0.8.0
+packaging==25.0

@@ -36,8 +36,35 @@ SLG-Renpy-Toolkit <game_folder> --features intro      # only the opening-logo sk
 SLG-Renpy-Toolkit <game_folder> --features fontfix,intro
 ```
 
-Windows binaries are attached to [Releases](../../releases). The tool itself is pure
-standard library, so running from source needs no `pip install`.
+Windows binaries are attached to [Releases](../../releases). The GUI uses
+CustomTkinter; running from source requires `python -m pip install -r requirements.txt`.
+
+## Version 1.0.0 and Windows executables
+
+The release version is `1.0.0`. It is built as an onedir package: keep each
+executable beside its `_internal` directory and retain the complete application
+folder when copying or distributing it. Download both entry points when you
+need both interfaces:
+
+This release adds a five-page CustomTkinter interface, a manually managed game
+library, and saved theme/window preferences. “Simulate install and run” works
+on an isolated temporary copy; confirming the main menu only records the test
+result. Applying patches to the original game is a separate, reversible action.
+RPA-3.0 indexes are parsed with bounded, data-only pickle handling; RPA-1.0/2.0
+remain unsupported.
+
+- `SLG-Renpy-Toolkit.exe` opens the GUI and does not create a console window.
+  Dropping a game folder onto it opens the GUI with that folder selected.
+- `SLG-Renpy-Toolkit-CLI.exe` is the console version. It accepts a game folder,
+  `--dry-run`, `--revert`, `--force`, feature switches, and `--version`.
+
+Examples:
+
+```powershell
+SLG-Renpy-Toolkit-CLI.exe --version
+SLG-Renpy-Toolkit-CLI.exe "D:\Games\SomeGame" --dry-run
+SLG-Renpy-Toolkit-CLI.exe "D:\Games\SomeGame" --revert
+```
 
 ---
 
@@ -61,37 +88,43 @@ standard library, so running from source needs no `pip install`.
 
 ### 方式一：直接用 exe（推荐，不需要装 Python）
 
-1. 到 [Releases](../../releases) 下载 `SLG-Renpy-Toolkit.exe`。
-2. 双击打开窗口 → 「浏览...」选游戏目录。窗口会立刻给出一份**兼容性预检**
-   （可装 / 有风险 / 不适用 + 理由），每个功能卡片右侧还有一个状态小标签，
-   告诉你它现在是「未安装」「已安装」还是遇到了外来文件。
+1. 到 [Releases](../../releases) 下载 `SLG-Renpy-Toolkit.exe`（图形界面）；需要终端操作时另下 `SLG-Renpy-Toolkit-CLI.exe`。
+2. 双击打开窗口 → 「浏览...」选游戏目录。窗口会立刻给出**兼容性预检**，
+   分别说明字体补丁和跳过开场是否具备所需 API，以及每项判断的理由；
+   每个功能卡片右侧还有一个状态小标签，告诉你它现在是「未安装」「已安装」还是遇到了外来文件。
 3. 在「功能」区**勾选你这次想装什么**——两个功能各自独立，不勾就是不动。
-4. 先点「**干跑预览**」看每个被勾中的功能打算做什么，确认无误后点「**开始处理**」。
+4. 先点「**模拟安装并运行**」。工具会把游戏复制到临时目录，在副本上安装所选补丁；
+   原游戏目录保持不变。兼容预检、复制、安装、启动和主菜单确认会分别显示状态。
+   如果找到多个启动器，先选择要运行的 exe；看到主菜单后点确认，只有这样才显示模拟成功。
+   退出码为 0 但未确认主菜单时只会显示「待确认」，不会误报成功。
 5. 需要还原时点「**撤销还原**」。它**不看勾选状态**，把本工具装过的所有东西
    （连同 Ren'Py 编译出来的 `.rpyc`）一起删掉，并把安装时隔离掉的原文件放回原处。
 
-日志默认收起，勾上窗口底部的「显示日志」才展开——控制台版本的输出原样在里面。
+日志默认收起，勾上窗口底部的「查看处理日志」才展开；模拟和实际安装的详细输出都在这里。
 
-也可以**把游戏文件夹整个拖到 exe 的图标上**，跳过窗口直接按默认功能处理，跑完自动退出。
+也可以**把游戏文件夹拖到 `SLG-Renpy-Toolkit.exe` 图标上**，在窗口中预选该游戏；拖到 `SLG-Renpy-Toolkit-CLI.exe` 则按命令行默认功能直接处理。
 
 ### 方式二：从源码运行
 
-需要 Python 3.9 或更高（本项目在 3.13 上开发构建；Ren'Py 8.x 自带的是 3.9）。
-除 GUI 主题外无第三方依赖：
+需要 Python 3.9 或更高（本项目的当前 Windows 构建环境为 3.13.12；Ren'Py 8.x 自带的是 3.9）。
+GUI 依赖 CustomTkinter。安装运行依赖后再启动：
 
 ```bash
 git clone https://github.com/JXZ666/SLG-Renpy-Toolkit.git
 cd SLG-Renpy-Toolkit
-python app_main.py                    # 打开窗口
-python app_main.py "D:\Games\SomeGame"  # 直接安装
+python -m pip install -r requirements.txt  # 安装 GUI 运行依赖
+python app_window.py                  # 打开窗口
+python app_window.py "D:\Games\SomeGame"  # 打开窗口并选中游戏
+python app_main.py --version          # 显示 CLI 版本
+python app_main.py "D:\Games\SomeGame" --dry-run  # 命令行预览
 ```
 
 ### 命令行参数
 
 | 参数 | 说明 |
 |---|---|
-| `<game_dir>` | 游戏根目录，即包含 `game/` 和 `renpy/` 的那一层。省略则打开窗口 |
-| `--dry-run` | 只打印决策表，不写任何文件。**先跑这个** |
+| `<game_dir>` | 游戏根目录，即包含 `game/` 和 `renpy/` 的那一层。CLI 省略时显示帮助 |
+| `--dry-run` | 只打印静态决策，不写文件，也不启动游戏；需要验证启动时请用 GUI 的「模拟安装并运行」 |
 | `--revert` | 撤销：删掉装进去的所有文件，并放回被隔离的原文件 |
 | `--features IDS` | 逗号分隔，勾选要装的功能。可选 `fontfix`、`intro`。默认两个都装 |
 | `--no-features IDS` | 逗号分隔，明确排除某些功能。`--features` 与 `--no-features` 同时给出时后者胜 |
@@ -100,20 +133,15 @@ python app_main.py "D:\Games\SomeGame"  # 直接安装
 
 ## 兼容性预检
 
-选中游戏目录后（命令行则是任何动作开始前），工具会先读一遍游戏本体并给出一句话结论：
+选中游戏目录后（命令行则是任何动作开始前），工具会先检查发行版信息，并**分别判断每个功能需要的引擎 API**：
 
-- **可装** —— 没发现已知障碍。
-- **有风险** —— 能装，但有需要你知道的事。比如游戏脚本全部打包在 `.rpa` 里，
-  工具看不到它引用了哪些字体；或者检测到这是 Python 2.7 的 Ren'Py 7，
-  写入的文件语法上是有效的但从未在真机上验证过。
-- **不适用** —— 这不是一个 Ren'Py 发行版（缺 `game/` 或 `renpy/`），**直接拒绝执行**。
+- `fontfix` 需要 Ren'Py 提供 `FontGroup` 和 `config.font_name_map`。缺少任一必需 API 时，字体功能标为不支持并阻止安装。
+- `intro` 单独检查 `config.label_overrides`。字体功能不支持，不代表跳过开场也不支持；反过来也一样。
+- 每个功能都有独立的支持状态和理由。`.rpa` 中脚本不可读、架构或 Python 运行时等其他情况也会单独提示。
 
-预检只看文件的大小与头部，**不启动 Ren'Py、不反序列化脚本**，所以在窗口里是瞬时的。
-它读的是 `game/script_version.txt`（主源）、`renpy/vc_version.py`、
-`renpy/__init__.py`，外加 `lib/` 与 `game/` 的目录列表。
+Ren'Py **7.5.3 不支持本工具的 `fontfix`**：它没有 `config.font_name_map`，继续安装生成的字体垫片会让游戏启动时报错。Python 2.7 不是这个问题的唯一判断依据；必须看目标发行版实际提供的 API。`intro` 仍按 `config.label_overrides` 的能力单独判断。
 
-顺便说一句「没找到 `label splashscreen:`」只是提示，不是警告：跳过开场是靠
-`config.label_overrides` 查表生效的，与游戏自己有没有写过这个 label 无关。
+兼容扫描不启动 Ren'Py，也不执行补丁。它只能确认扫描到的文件/API 线索，**不能替代引擎启动验证**，更不能保证菜单、存档或字体渲染在游戏中正常。`config.label_overrides` 存在只说明跳过开场补丁具备所需 API；游戏还需实际定义 `splashscreen` 才会有可见效果。
 
 ## 安全网
 
@@ -135,8 +163,9 @@ python app_main.py "D:\Games\SomeGame"  # 直接安装
 ## 工作原理
 
 窗口里每个功能卡片都是从 `features.py` 的那张表里画出来的，功能自己实现
-「装什么、撤什么、怎么判断已装」，窗口一行都不需要改。命令行与窗口走的是同一条
-`cmd_fontfix.run()`，所以两者的行为不会分叉。
+「装什么、撤什么、怎么判断已装」，窗口一行都不需要改。CLI 和 GUI 的实际安装、撤销
+共用 `cmd_fontfix.run()`；GUI 的模拟流程由 `simulation.py` 把同一安装逻辑运行在临时副本中，
+并单独管理启动器、运行状态和清理。
 
 ### 汉化预飞（字体）
 
@@ -188,9 +217,7 @@ FontGroup。如果你发现游戏里的表情符号显示异常，欢迎开 issu
 
 **Q：支持哪些版本的 Ren'Py？**
 
-Ren'Py 8.x 的 **8.2.0 / 8.2.3 / 8.3.0 / 8.3.2 / 8.3.6 / 8.4.2 / 8.5.0** 都实测过，
-见下面「兼容性实测记录」。字体扫描读的是 `.rpyc` 结构，对 7.x 未做测试——
-检测到 Ren'Py 7 时预检会给出提示，其中 Python 2.7 的那类报「有风险」。
+不能只按 Ren'Py 主版本或 Python 版本承诺支持。预检会对 `fontfix` 和 `intro` 分别检查必需 API，并在界面或命令行报告每个功能的支持状态与原因；缺少对应 API 的功能会被拦截。Ren'Py 7.5.3 缺少 `config.font_name_map`，因此 `fontfix` 明确不受支持；`intro` 则独立按 `config.label_overrides` 判断。预检不启动游戏，API 检查通过也不等于游戏已完成运行验证。
 
 **Q：游戏打包在 `.rpa` 里，需要我先解包吗？**
 
@@ -203,10 +230,10 @@ Ren'Py 8.x 的 **8.2.0 / 8.2.3 / 8.3.0 / 8.3.2 / 8.3.6 / 8.4.2 / 8.5.0** 都实�
 
 ## 已知限制
 
-- **主要在 Windows 上验证**。核心逻辑是纯标准库、基本可移植，但 Linux / macOS
+- **主要在 Windows 上验证**。安装、预检与归档逻辑主要使用 Python 标准库；Linux / macOS
   未做测试，README 不宣称支持。
-- 窗口界面依赖 tkinter（Windows 官方 Python 自带）。
-  主题美化 `sv-ttk` 是**可选**的，没装也能正常用（见 `requirements.txt`）。
+- 窗口界面依赖 tkinter 和 CustomTkinter。运行源码前请安装 `requirements.txt` 中的固定版本。
+- 兼容预检不运行目标引擎或补丁。静态 API 检查可阻止已知不兼容功能，但不能代替在游戏副本中启动并检查菜单、字体和存档。
 - 撤销依赖 `install_manifest.json`。工作目录固定在 `%LOCALAPPDATA%\rpykit`，
   你可以用环境变量 `RPYKIT_WORK` 改到别处。**别把它删了**，否则就没法自动撤销，
   但那时候手动删那几个文件同样有效。
@@ -217,14 +244,23 @@ Ren'Py 8.x 的 **8.2.0 / 8.2.3 / 8.3.0 / 8.3.2 / 8.3.6 / 8.4.2 / 8.5.0** 都实�
 
 ## 从源码构建 exe
 
-需要 Windows + Python，脚本会自己装 PyInstaller：
+需要 Windows + Python 3.9 或更高版本。构建依赖单独固定在 `requirements-build.txt`，不要装进只用于运行源码的环境：
 
 ```bat
+python -m venv .venv-build
+.venv-build\Scripts\activate
+python -m pip install -r requirements-build.txt
+python -m pip check
 build_exe.bat
 ```
 
-产物在 `dist\SLG-Renpy-Toolkit.exe`（约 23 MB，其中 17.7 MB 是内嵌的思源黑体），
-单文件、免 Python 环境。想要桌面快捷方式，运行 `make_shortcut.ps1`。
+构建清单固定 CustomTkinter **6.0.0**、PyInstaller **6.22.3** 及构建依赖，版本取自 2026-09-28 本机 Windows / Python 3.13.12 构建环境的已安装包元数据。`build_exe.bat` 会校验当前环境与清单一致，不会自行安装或升级依赖。CustomTkinter 的主题和字体资源随 onedir 包一起收集；重生成图标才需要 Pillow：`python -m pip install Pillow`。
+
+构建产物默认放在 `release\1.0.0\`：GUI 在 `SLG-Renpy-Toolkit\` 文件夹内，CLI 在
+`SLG-Renpy-Toolkit-CLI\` 文件夹内；两个文件夹须完整保留 `_internal` 运行时文件，exe 都带 Windows 版本资源 `1.0.0`。CustomTkinter 需要 onedir 方式收集主题与字体资源，不能只复制 exe。也可运行
+`build_exe.bat D:\temp\rpykit-build` 指定另一个输出目录。构建脚本使用临时
+工作目录，不覆盖仓库中的 `dist\` 或 `build\`。想要桌面快捷方式，运行
+`make_shortcut.ps1` 并选择 GUI 可执行文件。
 
 ## 运行测试
 
@@ -233,36 +269,38 @@ python tests/test_fontfix.py   # 垫片逻辑（不需要真的启动 Ren'Py）
 python tests/test_install.py   # 冻结成 exe 后才会暴露的两个问题
 python tests/test_gui.py       # 窗口布局与主题切换（需要 tkinter）
 python tests/test_compat.py    # 兼容性预检的判定规则（合成目录树）
+python tests/test_simulation.py # 临时副本、清理、启动状态和存档隔离
+python -m pytest tests/test_release.py tests/test_app_state.py tests/test_rpa.py tests/test_font_subset.py
 ```
 
-前三个是自包含的。`tests/test_compat.py` 的默认用例也全是自包含的合成目录树
+pytest 命令覆盖发布身份、GUI 状态存取、RPA 安全解析与显式字符集的字体子集模块；没有安装可选 `fontTools` 时，字体生成用例会跳过。其余测试使用合成目录、模拟会话或静态入口检查，不启动真实游戏。`tests/test_compat.py` 的默认用例全是自包含的合成目录树
 （构造出 py2、纯打包、归档不可读、根目录同名字体冲突等情形，断言判定结果）；
 再加 `--real` 才会去扫本机真实游戏目录，只断言「不抛异常」。目录可用环境变量
 `RPYKIT_GAMES_DIR` 指定。
 
-## 兼容性实测记录
+## 兼容性验证记录
 
-下面这张表是对 `<本地测试游戏目录>` 里全部 9 个游戏跑一遍的结果。
-**先把话说在前面：我一局游戏都没有真正启动过。** 下表里「装/撤」两列验证的是
-**文件层面**的事——装进去什么、撤销后是否与开始时**逐字节一致**、有没有留下残渣。
-至于游戏里是否真的没有豆腐块、是否真的跳过 logo 直达主菜单，**那是需要你打开游戏
-用眼睛看的，不是这张表能替你保证的。**
+下表保留了早期版本对 `<本地测试游戏目录>` 中 9 个游戏的文件层面记录。它们是在按功能增加 API 门禁之前完成的，旧版「可装 / 有风险」不能当作当前某项功能的支持承诺。当前是否允许安装，应以新版预检中 `fontfix` 与 `intro` 各自的 API 状态和理由为准。
 
-| 游戏 | Ren'Py | Python | 脚本 | 预检 | 本次做了什么 |
-|---|---|---|---|---|---|
-| Game-A 0.6.0 | 8.4.2 | 3.12 | 5 rpa + 1 散 | 可装 | 装 + 撤 |
-| Game-B 0.06.06b | 8.3.0 | 3.9 | 2 rpa + 50 散 `.rpyc` | 可装 | 装 + 撤 |
-| Game-C 0.6.23 | 8.2.3 | 3.9 | 5 rpa + 9 散 | 可装 | 装 + 撤 |
-| Game-D 0.69 | 8.3.6 | 3.9 | 1 rpa + 15 散 | 可装 | 装 + 撤 |
-| Game-E 0.12 | 8.3.0 | 3.9 | 1 rpa + 13 散 | 可装 | 装 + 撤 |
-| Game-F 0.8 | 8.3.2 | 3.9 | 26 散 | 可装 | 装 + 撤 |
-| Game-G 2.0.0 | 8.2.0 | 3.9 | 9 rpa，**全打包** | 有风险 | 仅干跑 |
-| Game-H 0.9 | 8.5.0 | 3.12 | 1 rpa，**全打包** | 有风险 | 仅干跑 |
-| Game-I 0.6.6.0 | **7.4.11** | **2.7** | 11 rpa，**全打包** | 有风险 | 仅干跑 |
+这些记录验证的是扫描、静态干跑、安装和撤销，不等同于引擎启动验证。此前这些样本都没有成功启动到主菜单；Game-J 曾实际尝试启动，但旧字体补丁因缺少 `config.font_name_map` 报错，故新版明确拦截它的 `fontfix`。新模拟流程会使用临时副本；本次只读取了该游戏的兼容信息和错误日志，没有启动或改动原目录。
+
+| 游戏 | Ren'Py | Python | 脚本 | 旧版预检 | 已做的文件检查 | 启动状态 |
+|---|---|---|---|---|---|---|
+| Game-A 0.6.0 | 8.4.2 | 3.12 | 5 rpa + 1 散 | 可装 | 装 + 撤 | 未验证 |
+| Game-B 0.06.06b | 8.3.0 | 3.9 | 2 rpa + 50 散 `.rpyc` | 可装 | 装 + 撤 | 未验证 |
+| Game-C 0.6.23 | 8.2.3 | 3.9 | 5 rpa + 9 散 | 可装 | 装 + 撤 | 未验证 |
+| Game-D 0.69 | 8.3.6 | 3.9 | 1 rpa + 15 散 | 可装 | 装 + 撤 | 未验证 |
+| Game-E 0.12 | 8.3.0 | 3.9 | 1 rpa + 13 散 | 可装 | 装 + 撤 | 未验证 |
+| Game-F 0.8 | 8.3.2 | 3.9 | 26 散 | 可装 | 装 + 撤 | 未验证 |
+| Game-G 2.0.0 | 8.2.0 | 3.9 | 9 rpa，**全打包** | 有风险 | 仅干跑 | 未验证 |
+| Game-H 0.9 | 8.5.0 | 3.12 | 1 rpa，**全打包** | 有风险 | 仅干跑 | 未验证 |
+| Game-I 0.6.6.0 | **7.4.11** | **2.7** | 11 rpa，**全打包** | 有风险 | 仅干跑 | 未验证 |
+| Game-J 1.01 | **7.5.3** | **2.7** | — | 旧版未拦截 fontfix | 字体补丁曾写入 | **启动失败：缺少 `config.font_name_map`；fontfix 当前应被拦截。intro 由 `config.label_overrides` 独立判定。** |
 
 六个「可装」的游戏都做了真装 + 撤销，撤销后与动手前的指纹**逐字节相同**，
 `game/` 目录下的文件名列表也一个不差。三个「有风险」的只跑了 `--dry-run`，
-确认决策表生成正常、且**一个字节都没写**。
+确认决策表生成正常、且**一个字节都没写**。这些都只是旧版本的文件操作记录，
+不能据此声称功能 API 已逐款确认，更没有任何一款成功启动到主菜单。
 
 ### 逐条说明
 
@@ -272,7 +310,7 @@ python tests/test_compat.py    # 兼容性预检的判定规则（合成目录�
   加 `--force` 才会隔离它并在撤销时放回。两种路径都实测过，撤销后 `game/`
   顶层仍是原来的 18 项。它游戏源码是打包的，`game/` 下那几个 `.rpy` 是本工具的。
 - **Game-B 0.06.06b** — 它读不到 `game/script_version.txt`，
-  版本是从 `renpy/vc_version.py` 认出来的（作品名 "Synthetic Title"）。
+  版本是从 `renpy/vc_version.py` 认出来的（作品名）。
   50 个散装 `.rpyc`，字体扫描走的是散装路径而不是归档路径。
 - **Game-C 0.6.23** — 它自己定义 `splashscreen`（在 `script.rpy` 里），
   跳过开场有实际效果。另有一个容易误判的点：它 `game/` 根目录下有一个
@@ -293,9 +331,9 @@ python tests/test_compat.py    # 兼容性预检的判定规则（合成目录�
 - **Game-I 0.6.6.0** — 唯一的 **Ren'Py 7.4.11 + Python 2.7**，
   且 lib 里 **32 位与 64 位架构同时存在**，11 个 rpa 全打包。
   生成的垫片脚本刻意写成 **Python 2 语法安全**（无 f-string、无 dict view、
-  无 `super()`），且 `FontGroup` / `config.font_name_map` / `config.label_overrides`
-  在 Ren'Py 7 中都存在——但**从未在真机上跑过**，这就是它只干跑的原因。
-  如果你拿它试了，请开 issue 告诉我结果。
+  无 `super()`）。旧版只对它干跑，未留存按功能确认运行时 API 的记录；
+  因此不能由 Ren'Py 7 主版本或 Python 2 语法兼容推断它的功能支持，必须用当前预检分别判断，
+  且游戏启动状态仍是**未验证**。
 
 ### 验证是怎么做的
 

@@ -81,10 +81,11 @@ class _Env(object):
 
 
 def run_fontfix(game_dir, revert=False, dry_run=False, force=False, mode="luna",
-                skip_intro=True):
-    ns = argparse.Namespace(game_dir=game_dir, work=None, mode=mode,
+                skip_intro=True, features=None, work=None):
+    ns = argparse.Namespace(game_dir=game_dir, work=work, mode=mode,
                             lang="chinesesimplified", revert=revert,
-                            force=force, dry_run=dry_run, skip_intro=skip_intro)
+                            force=force, dry_run=dry_run, skip_intro=skip_intro,
+                            features=features)
     return cmd_fontfix.run(ns)
 
 
@@ -94,10 +95,25 @@ def intro_text():
         intro_label=cmd_fontfix.INTRO_LABEL)
 
 
-def make_game(root, with_script=False):
+def make_game(root, with_script=False, font_map=True, label_overrides=True,
+              font_group=True):
     """The minimum fontfix will accept: game/ plus a renpy/ tree."""
     os.makedirs(os.path.join(root, "game"), exist_ok=True)
     os.makedirs(os.path.join(root, "renpy", "common"), exist_ok=True)
+    config = []
+    if font_map:
+        config.append("font_name_map = {}\n")
+    if label_overrides:
+        config.append("label_overrides = {}\n")
+    with open(os.path.join(root, "renpy", "config.py"), "w", encoding="utf-8") as f:
+        f.writelines(config)
+    if font_group:
+        font_py = os.path.join(root, "renpy", "text", "font.py")
+        os.makedirs(os.path.dirname(font_py), exist_ok=True)
+        with open(font_py, "w", encoding="utf-8") as f:
+            f.write("class FontGroup(object):\n"
+                    "    def add(self, font, start, end, target=None):\n"
+                    "        pass\n")
     if with_script:
         # Any .rpyc-shaped blob is enough; the scan is a regex over payloads.
         with open(os.path.join(root, "game", "script.rpyc"), "wb") as f:
@@ -171,6 +187,9 @@ def main():
             with _Env(RPYKIT_WORK=work):
                 run_fontfix(game, dry_run=True)
                 check("dry-run writes nothing", tree(game) == before, tree(game))
+                check("dry-run leaves the workspace untouched",
+                      not os.path.exists(proj.work_dir_for(game)),
+                      proj.work_dir_for(game))
 
                 _report, first = cmd_fontfix.analyse(game)
                 run_fontfix(game)
@@ -186,6 +205,11 @@ def main():
                 check("recognises its own shim", st["ours"], st)
                 check("reports the current template", st["current"], st)
                 check("records luna mode", st["mode"] == "luna", st)
+                installed_manifest = proj.load_manifest(proj.work_dir_for(game))
+                check("manifest records content hashes and ownership",
+                      all(e.get("sha256") and e.get("owner") == "rpykit"
+                          for e in installed_manifest["files"]),
+                      installed_manifest.get("files"))
 
                 # The report outlives the run, and the two things a caller
                 # reads it for are which features it installed and what the
@@ -239,6 +263,163 @@ def main():
         finally:
             cmd_fontfix.ASSET_FONT = real_asset
 
+        # Unsupported font APIs must be rejected before any game/work writes,
+        # while the independent intro feature remains installable by itself.
+        print("feature-specific compatibility gate")
+        bad_api = make_game(os.path.join(tmp, "BadApi"), with_script=True,
+                            font_map=False, label_overrides=True, font_group=True)
+        bad_before = tree(bad_api)
+        unsupported_work = os.path.join(tmp, "unsupported-work")
+        with _Env(RPYKIT_WORK=unsupported_work):
+            try:
+                run_fontfix(bad_api)
+                check("default selection rejects unsupported fontfix", False)
+            except cmd_fontfix.FontFixError as e:
+                check("default selection rejects unsupported fontfix",
+                      "font_name_map" in str(e), str(e))
+            check("unsupported selection writes neither game nor workspace",
+                  tree(bad_api) == bad_before and not os.path.exists(unsupported_work),
+                  tree(bad_api))
+            run_fontfix(bad_api, features=["intro"])
+            check("explicit intro-only install succeeds independently",
+                  os.path.isfile(os.path.join(bad_api, "game", cmd_fontfix.INTRO_REL))
+                  and not os.path.exists(os.path.join(bad_api, "game", cmd_fontfix.SHIM_REL)))
+
+        # New manifests bind file ownership to content. Edited output and its
+        # compiled derivative must survive revert.
+        print("revert preserves user edits")
+        edited = make_game(os.path.join(tmp, "Edited"), with_script=True)
+        real_asset = cmd_fontfix.ASSET_FONT
+        cmd_fontfix.ASSET_FONT = small_font
+        try:
+            with _Env(RPYKIT_WORK=os.path.join(tmp, "edited-work")):
+                run_fontfix(edited)
+                shim = os.path.join(edited, "game", cmd_fontfix.SHIM_REL)
+                font = os.path.join(edited, "game", *cmd_fontfix.GAME_FONT_REL.split("/"))
+                with open(shim, "a", encoding="utf-8") as f:
+                    f.write("# edited by player\n")
+                with open(font, "ab") as f:
+                    f.write(b"player-edit")
+                with open(shim + "c", "wb") as f:
+                    f.write(b"compiled from edited source")
+                run_fontfix(edited, revert=True)
+                check("revert keeps an edited shim", os.path.isfile(shim))
+                check("revert keeps its compiled output when source changed",
+                      os.path.isfile(shim + "c"))
+                check("revert keeps an edited font", os.path.isfile(font))
+        finally:
+            cmd_fontfix.ASSET_FONT = real_asset
+
+        # Path hashes isolate same-named games. A legacy basename directory is
+        # accepted only when its manifest's game_dir matches this exact target.
+        print("workspace identity and legacy manifest")
+        game_a = make_game(os.path.join(tmp, "one", "Same"))
+        game_b = make_game(os.path.join(tmp, "two", "Same"))
+        identity_root = os.path.join(tmp, "identity-work")
+        legacy_asset = cmd_fontfix.ASSET_FONT
+        cmd_fontfix.ASSET_FONT = small_font
+        with _Env(RPYKIT_WORK=identity_root):
+            hashed_a = proj.work_dir_for(game_a)
+            hashed_b = proj.work_dir_for(game_b)
+            check("same basenames get distinct hashed workspaces", hashed_a != hashed_b,
+                  (hashed_a, hashed_b))
+            legacy = proj.legacy_work_dir_for(game_a)
+            proj.ensure_dir(legacy)
+            old_shim = os.path.join(game_a, "game", cmd_fontfix.SHIM_REL)
+            with open(old_shim, "w", encoding="utf-8") as f:
+                f.write("# GENERATED BY `rpykit fontfix`\ninit 999 python:\n    pass\n")
+            old_font = os.path.join(game_a, "game", *cmd_fontfix.GAME_FONT_REL.split("/"))
+            os.makedirs(os.path.dirname(old_font), exist_ok=True)
+            shutil.copy2(small_font, old_font)
+            proj.write_json(proj.manifest_path(legacy), {
+                "game_dir": os.path.abspath(game_a),
+                "files": [
+                    {"path": "game/" + cmd_fontfix.SHIM_REL,
+                     "source": "fontfix:shim"},
+                    {"path": "game/" + cmd_fontfix.GAME_FONT_REL,
+                     "source": "fontfix:cjk-font"},
+                ],
+                "quarantined": [],
+            })
+            check("matching legacy workspace remains discoverable",
+                  proj.work_dir_for(game_a) == legacy, proj.work_dir_for(game_a))
+            check("another same-named game cannot adopt its legacy manifest",
+                  proj.work_dir_for(game_b) != legacy, proj.work_dir_for(game_b))
+            before_b = tree(game_b)
+            legacy_manifest_before = open(proj.manifest_path(legacy), "rb").read()
+            try:
+                run_fontfix(game_b, features=["intro"], work=legacy)
+                check("install rejects a foreign game_dir manifest", False)
+            except cmd_fontfix.FontFixError:
+                check("install rejects a foreign game_dir manifest",
+                      tree(game_b) == before_b
+                      and open(proj.manifest_path(legacy), "rb").read()
+                      == legacy_manifest_before)
+            try:
+                run_fontfix(game_b, revert=True, work=legacy)
+                check("foreign manifest is rejected", False)
+            except cmd_fontfix.FontFixError:
+                check("foreign manifest is rejected", tree(game_b) == before_b)
+
+            wrong_id_work = os.path.join(identity_root, "wrong-id-manifest")
+            proj.ensure_dir(wrong_id_work)
+            proj.write_json(proj.manifest_path(wrong_id_work), {
+                "version": 2,
+                "game_dir": os.path.abspath(game_b),
+                "game_id": "0" * 64,
+                "files": [], "quarantined": [],
+            })
+            wrong_id_before = open(proj.manifest_path(wrong_id_work), "rb").read()
+            try:
+                run_fontfix(game_b, features=["intro"], work=wrong_id_work)
+                check("install rejects a foreign game_id manifest", False)
+            except cmd_fontfix.FontFixError:
+                check("install rejects a foreign game_id manifest",
+                      tree(game_b) == before_b
+                      and open(proj.manifest_path(wrong_id_work), "rb").read()
+                      == wrong_id_before)
+            try:
+                run_fontfix(game_b, revert=True, work=wrong_id_work)
+                check("revert rejects a foreign game_id manifest", False)
+            except cmd_fontfix.FontFixError:
+                check("revert rejects a foreign game_id manifest",
+                      tree(game_b) == before_b)
+            run_fontfix(game_a, revert=True)
+            check("legacy no-hash manifest still reverts its tool files",
+                  not os.path.exists(old_shim) and not os.path.exists(old_font))
+        cmd_fontfix.ASSET_FONT = legacy_asset
+
+        # A failure while writing the manifest after a file replacement rolls
+        # the game tree and ledger back to their exact pre-install state.
+        print("interrupted install recovery")
+        interrupted = make_game(os.path.join(tmp, "Interrupted"), with_script=True)
+        interrupt_before = tree(interrupted)
+        interrupt_work_root = os.path.join(tmp, "interrupt-work")
+        real_asset = cmd_fontfix.ASSET_FONT
+        real_record_file = proj.record_file
+        cmd_fontfix.ASSET_FONT = small_font
+
+        def fail_after_record(*args, **kwargs):
+            real_record_file(*args, **kwargs)
+            raise OSError("simulated interruption after manifest write")
+
+        proj.record_file = fail_after_record
+        try:
+            with _Env(RPYKIT_WORK=interrupt_work_root):
+                try:
+                    run_fontfix(interrupted, features=["fontfix"])
+                    check("interrupted install raises", False)
+                except OSError:
+                    pass
+                work_path = proj.work_dir_for(interrupted)
+                check("interrupted install restores game files",
+                      tree(interrupted) == interrupt_before, tree(interrupted))
+                check("interrupted install removes partial ownership manifest",
+                      not os.path.exists(proj.manifest_path(work_path)))
+        finally:
+            proj.record_file = real_record_file
+            cmd_fontfix.ASSET_FONT = real_asset
+
         # --- a foreign file in the way is still refused ----------------------
         print("a shim this tool did not write")
         g2 = make_game(os.path.join(tmp, "Foreign"))
@@ -256,6 +437,25 @@ def main():
                 check("refuses to overwrite it", False, "SystemExit: %s" % e)
             check("leaves the file untouched",
                   open(foreign, encoding="utf-8").read().startswith("# the player's"))
+
+        forced = make_game(os.path.join(tmp, "ForcedCollision"), with_script=True)
+        forced_shim = os.path.join(forced, "game", cmd_fontfix.SHIM_REL)
+        with open(forced_shim, "w", encoding="utf-8") as f:
+            f.write("# player-owned shim before --force\n")
+        forced_work = os.path.join(tmp, "forced-work")
+        real_asset = cmd_fontfix.ASSET_FONT
+        cmd_fontfix.ASSET_FONT = small_font
+        try:
+            with _Env(RPYKIT_WORK=forced_work):
+                run_fontfix(forced, force=True, features=["fontfix"])
+                check("forced fontfix collision replaces the target temporarily",
+                      cmd_fontfix._is_ours(forced_shim))
+                run_fontfix(forced, revert=True)
+                check("revert restores a forced fontfix collision",
+                      open(forced_shim, encoding="utf-8").read()
+                      == "# player-owned shim before --force\n")
+        finally:
+            cmd_fontfix.ASSET_FONT = real_asset
 
         # --- the intro overlay, and the rival it displaces -------------------
         print("skip the opening logos")
@@ -311,7 +511,7 @@ def main():
             check("quarantines the rival and its .rpyc",
                   not os.path.exists(rival) and not os.path.exists(rival + "c"))
             check("keeps a backup of the rival",
-                  os.path.isfile(os.path.join(work4, "IntroGame", "quarantine",
+                  os.path.isfile(os.path.join(proj.work_dir_for(g4), "quarantine",
                                               "zzz_skip_splash.rpy")))
             check("leaves the game's own splashscreen label alone",
                   os.path.isfile(own))
@@ -322,25 +522,45 @@ def main():
             check("revert removes the intro",
                   not os.path.exists(intro) and not os.path.exists(intro + "c"))
 
+        # A user-edited quarantine copy is retained and never restored as if it
+        # were the original rival source.
+        tampered = make_game(os.path.join(tmp, "TamperedQuarantine"), with_script=True)
+        rival_t = os.path.join(tampered, "game", "zz_skip_splash.rpy")
+        with open(rival_t, "w", encoding="utf-8") as f:
+            f.write('init python:\n    config.label_overrides["splashscreen"] = "x"\n')
+        tamper_work_root = os.path.join(tmp, "tamper-work")
+        with _Env(RPYKIT_WORK=tamper_work_root):
+            run_fontfix(tampered, force=True, features=["intro"])
+            qpath = os.path.join(proj.work_dir_for(tampered), "quarantine",
+                                 "zz_skip_splash.rpy")
+            with open(qpath, "a", encoding="utf-8") as f:
+                f.write("# changed after quarantine\n")
+            run_fontfix(tampered, revert=True)
+            check("modified quarantine is kept and not restored",
+                  not os.path.exists(rival_t) and os.path.isfile(qpath))
+
         # The workspace is under %LOCALAPPDATA% on C: while games habitually sit
         # on another drive, so the quarantine move crosses a volume boundary in
         # normal use. os.replace cannot do that at all - it raises WinError 17 -
         # so the fallback is what has to work.
         print("quarantine across a volume boundary")
 
-        def _exdev(*_a):
-            raise OSError(18, "Invalid cross-device link")
+        def _exdev_once(src_path, dst_path):
+            if not getattr(_exdev_once, "raised", False):
+                _exdev_once.raised = True
+                raise OSError(18, "Invalid cross-device link")
+            return real_replace(src_path, dst_path)
 
         src = os.path.join(tmp, "rival.rpy")
         dst = os.path.join(tmp, "other_volume", "rival.rpy")
         with open(src, "w", encoding="utf-8") as f:
             f.write("rival")
-        real_rename = os.rename
-        os.rename = _exdev
+        real_replace = os.replace
+        os.replace = _exdev_once
         try:
             cmd_fontfix._move_file(src, dst)
         finally:
-            os.rename = real_rename
+            os.replace = real_replace
         check("survives a rename that refuses to cross volumes",
               not os.path.exists(src) and open(dst, encoding="utf-8").read() == "rival")
 
