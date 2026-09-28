@@ -44,8 +44,9 @@ CustomTkinter; running from source requires `python -m pip install -r requiremen
 
 ## Version 1.0.0 and Windows executables
 
-The release version is `1.0.0`. It is built as an onedir package: keep each
-executable beside its `_internal` directory and retain the complete application
+The release version is `1.0.0`. It ships as single-file executables, which need
+no installation or unpacking, and as onedir bundles. An onedir executable must
+be kept beside its `_internal` directory, so retain the complete application
 folder when copying or distributing it. Download both entry points when you
 need both interfaces:
 
@@ -91,7 +92,7 @@ SLG-Renpy-Toolkit-CLI.exe "D:\Games\SomeGame" --revert
 
 ### 方式一：直接用 exe（推荐，不需要装 Python）
 
-1. 到 [Releases](../../releases) 下载 `SLG-Renpy-Toolkit.exe`（图形界面）；需要终端操作时另下 `SLG-Renpy-Toolkit-CLI.exe`。
+1. 到 [Releases](../../releases) 下载 `SLG-Renpy-Toolkit.exe`（图形界面）；需要终端操作时另下 `SLG-Renpy-Toolkit-CLI.exe`。这两个是**单文件版**，双击即可，不用解压。若需要 onedir 版本，另下对应的 `.zip`，解压后把 exe 和同目录的 `_internal` 文件夹一起保留。
 2. 双击打开窗口 → 「浏览...」选游戏目录。窗口会立刻给出**兼容性预检**，
    分别说明字体补丁和跳过开场是否具备所需 API，以及每项判断的理由；
    每个功能卡片右侧还有一个状态小标签，告诉你它现在是「未安装」「已安装」还是遇到了外来文件。
@@ -263,10 +264,14 @@ python -m pip check
 build_exe.bat
 ```
 
-构建清单固定 CustomTkinter **6.0.0**、PyInstaller **6.22.3** 及构建依赖，版本取自 2026-09-28 本机 Windows / Python 3.13.12 构建环境的已安装包元数据。`build_exe.bat` 会校验当前环境与清单一致，不会自行安装或升级依赖。CustomTkinter 的主题和字体资源随 onedir 包一起收集；重生成图标才需要 Pillow：`python -m pip install Pillow`。
+构建清单固定 CustomTkinter **6.0.0**、PyInstaller **6.22.3** 及构建依赖，版本取自 2026-09-28 本机 Windows / Python 3.13.12 构建环境的已安装包元数据。`build_exe.bat` 会校验当前环境与清单一致，不会自行安装或升级依赖。CustomTkinter 的主题和字体资源经 `collect_data_files` 收集，两种打包方式都会带上；重生成图标才需要 Pillow：`python -m pip install Pillow`。
 
-构建产物默认放在 `release\1.0.0\`：GUI 在 `SLG-Renpy-Toolkit\` 文件夹内，CLI 在
-`SLG-Renpy-Toolkit-CLI\` 文件夹内；两个文件夹须完整保留 `_internal` 运行时文件，exe 都带 Windows 版本资源 `1.0.0`。CustomTkinter 需要 onedir 方式收集主题与字体资源，不能只复制 exe。也可运行
+构建产物默认放在 `release\1.0.0\`。`build_exe.bat` 一次构建两种形态：
+GUI 的 onedir 在 `SLG-Renpy-Toolkit\` 文件夹内，CLI 在 `SLG-Renpy-Toolkit-CLI\` 文件夹内，
+这两个文件夹须完整保留 `_internal` 运行时文件；单文件版在 `onefile\` 子目录下
+（`onefile\SLG-Renpy-Toolkit.exe`、`onefile\SLG-Renpy-Toolkit-CLI.exe`），自带解压运行时，
+可以单独复制。所有 exe 都带 Windows 版本资源 `1.0.0`。只想构建其中一种形态时用
+`python tools\build_exe.py --mode onedir`（或 `--mode onefile`）。也可运行
 `build_exe.bat D:\temp\rpykit-build` 指定另一个输出目录。构建脚本使用临时
 工作目录，不覆盖仓库中的 `dist\` 或 `build\`。想要桌面快捷方式，运行
 `make_shortcut.ps1` 并选择 GUI 可执行文件。
@@ -279,10 +284,10 @@ python tests/test_install.py   # 冻结成 exe 后才会暴露的两个问题
 python tests/test_gui.py       # 窗口布局与主题切换（需要 tkinter）
 python tests/test_compat.py    # 兼容性预检的判定规则（合成目录树）
 python tests/test_simulation.py # 临时副本、清理、启动状态和存档隔离
-python -m pytest tests/test_release.py tests/test_app_state.py tests/test_rpa.py tests/test_font_subset.py
+python -m pytest tests/test_release.py tests/test_app_state.py tests/test_rpa.py
 ```
 
-pytest 命令覆盖发布身份、GUI 状态存取、RPA 安全解析与显式字符集的字体子集模块；没有安装可选 `fontTools` 时，字体生成用例会跳过。其余测试使用合成目录、模拟会话或静态入口检查，不启动真实游戏。`tests/test_compat.py` 的默认用例全是自包含的合成目录树
+pytest 命令覆盖发布身份、GUI 状态存取与 RPA 安全解析；没有安装可选 `fontTools` 时，字体生成用例会跳过。其余测试使用合成目录、模拟会话或静态入口检查，不启动真实游戏。`tests/test_compat.py` 的默认用例全是自包含的合成目录树
 （构造出 py2、纯打包、归档不可读、根目录同名字体冲突等情形，断言判定结果）；
 再加 `--real` 才会去扫本机真实游戏目录，只断言「不抛异常」。目录可用环境变量
 `RPYKIT_GAMES_DIR` 指定。

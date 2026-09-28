@@ -27,33 +27,66 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name='SLG-Renpy-Toolkit',
-    icon='assets/SLG-Renpy-Toolkit.ico',
-    version=version_file,
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='SLG-Renpy-Toolkit',
-)
+build_mode = (os.environ.get("RPYKIT_BUILD_MODE") or "onedir").strip().lower()
+if build_mode not in ("onedir", "onefile"):
+    raise SystemExit(
+        "RPYKIT_BUILD_MODE must be 'onedir' or 'onefile', got %r" % build_mode
+    )
+
+if build_mode == "onefile":
+    # Self-extracting single executable: binaries and datas go straight into the
+    # EXE. Never pass exclude_binaries=True here - that flag is onedir's contract
+    # and silently produces a broken onefile build.
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.datas,
+        [],
+        name='SLG-Renpy-Toolkit',
+        icon='assets/SLG-Renpy-Toolkit.ico',
+        version=version_file,
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+    )
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name='SLG-Renpy-Toolkit',
+        icon='assets/SLG-Renpy-Toolkit.ico',
+        version=version_file,
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+    )
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        name='SLG-Renpy-Toolkit',
+    )

@@ -607,10 +607,6 @@ class _OperationMixin:
         return _namespace(self.game_dir, feature_ids=ids,
                           skip_intro=("intro" in ids), **kw)
 
-    def dry_run(self):
-        """Compatibility alias for callers using the old GUI action name."""
-        self.simulate_run()
-
     def install(self):
         if not self._ticked():
             messagebox.showinfo(TITLE, "一个功能都没有勾选，没什么要装的。")
@@ -672,39 +668,8 @@ class _OperationMixin:
             code = 1
         finally:
             sys.stdout, sys.stderr = old_out, old_err
+        self.last_outcome = getattr(argv, "outcome", None)
         self.queue.put(("__done__", code))
-
-    def _drain(self):
-        try:
-            while True:
-                item = self.queue.get_nowait()
-                if isinstance(item, tuple):
-                    event = item[0]
-                    if event == "__done__":
-                        self._finish(item[1])
-                    elif event == "__sim_log__":
-                        self._log(str(item[1]))
-                    elif event == "__sim_stage__":
-                        self._set_sim_stage(item[1], item[2], item[3])
-                    elif event == "__sim_failed__":
-                        self._simulation_failed(item[1], item[2])
-                    elif event == "__sim_prepared__":
-                        self._simulation_prepared(item[1])
-                    elif event == "__sim_launched__":
-                        self._simulation_launched(item[1])
-                    elif event == "__sim_launch_failed__":
-                        self._simulation_launch_failed(item[1])
-                    elif event == "__sim_confirmed__":
-                        self._simulation_confirmed()
-                    elif event == "__sim_confirm_failed__":
-                        self._simulation_confirm_failed(item[1])
-                    elif event == "__sim_cleaned__":
-                        self._simulation_cleaned(item[1])
-                else:
-                    self._log(item)
-        except queue.Empty:
-            pass
-        self.root.after(80, self._drain)
 
     def _finish(self, code):
         self.busy = False
@@ -717,9 +682,14 @@ class _OperationMixin:
             return
         if code == 0:
             names = "、".join(features.title_of(fid) for fid in self.last_selected)
-            messagebox.showinfo(
-                TITLE, "完成：%s。\n\n现在开一次游戏看看效果。"
-                       % (names or "没有改动"))
+            if self.last_outcome == "no_changes":
+                messagebox.showinfo(
+                    TITLE, "完成：%s。\n\n选中的字体已全部覆盖中文，本次没有需要改动的文件。"
+                           % (names or "没有改动"))
+            else:
+                messagebox.showinfo(
+                    TITLE, "完成：%s。\n\n现在开一次游戏看看效果。"
+                           % (names or "没有改动"))
         else:
             self._show_log()
             messagebox.showerror(TITLE, "出错了，看下面的日志。")
@@ -751,6 +721,7 @@ class App(_OperationMixin):
         self.busy = False
         self.notify = True
         self.last_selected = []
+        self.last_outcome = None
         self.rows = {}
         self.var_on = {}
         self.action_buttons = {}
@@ -1166,7 +1137,6 @@ class App(_OperationMixin):
         self.log.pack(fill="both", expand=True, padx=9, pady=9)
         self.log.configure(state="disabled")
         self.var_log = tk.BooleanVar(value=False)
-        self.chk_log = None
 
     def _build_settings(self, parent):
         body = ctk.CTkScrollableFrame(parent, fg_color="transparent")
@@ -1243,10 +1213,6 @@ class App(_OperationMixin):
 
     def _apply_wrap(self):
         return None
-
-    def _paint_log(self, _palette=None):
-        self.log.configure(fg_color=_PAIR["panel"], text_color=_PAIR["fg"],
-                           border_color=_PAIR["border"])
 
     def _reset_simulation_status(self):
         self.sim_stage_state = {}
@@ -1445,9 +1411,6 @@ class App(_OperationMixin):
         self.var_log.set(True)
         self._show_page("log")
 
-    def _toggle_log(self):
-        self._show_log()
-
     def pick(self):
         chosen = filedialog.askdirectory(title="选择 Ren'Py 游戏根目录")
         if chosen:
@@ -1461,8 +1424,8 @@ class App(_OperationMixin):
                 self.state = app_state.add_game(self.state, self.game_dir)
                 self._persist_state()
                 self._render_library()
-            except (OSError, TypeError, ValueError):
-                pass
+            except (OSError, TypeError, ValueError) as exc:
+                self.var_global_status.set("游戏未能加入游戏库：%s" % exc)
         elif self.game_dir and not remember:
             self.state["active_game"] = self.game_dir
         self._refresh_state()
@@ -1569,7 +1532,7 @@ class App(_OperationMixin):
     def _persist_state(self):
         try:
             app_state.save_state(self.state, self.state_path)
-        except OSError as exc:
+        except (OSError, TypeError, ValueError) as exc:
             self.var_global_status.set("设置未能保存：%s" % exc)
 
     def _destroy_root(self):

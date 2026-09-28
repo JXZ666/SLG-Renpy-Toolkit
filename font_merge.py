@@ -30,8 +30,8 @@ found by trying it and watching it fail:
     pair.
 
 fontTools is an optional dependency and is imported only when a merge is asked
-for, exactly as in :mod:`font_subset`: the rest of the toolkit starts without it,
-and a caller that needs a merge reports the dependency rather than crashing.
+for: the rest of the toolkit starts without it, and a caller that needs a merge
+reports the dependency rather than crashing.
 
 The output is verified by reopening it and re-reading its cmap, because a font
 that silently lost its Latin glyphs would render the game's own English as

@@ -336,29 +336,3 @@ def extract_entry(archive_path, entry, dest_root, name):
         f.write(data)
     os.replace(tmp, dest_path)
     return len(data)
-
-
-def entry_size(entry):
-    """Total uncompressed size of an entry, including the inline prefix."""
-    offset, dlen, start = entry
-    return dlen + len(start or b"")
-
-
-def classify(name):
-    """Bucket an archive entry name into a coarse category."""
-    low = name.lower()
-    if low.endswith(".rpyc"):
-        return "script"
-    if low.endswith(".rpy"):
-        return "script-source"
-    if low.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")):
-        return "image"
-    if low.endswith((".ogg", ".opus", ".mp3", ".wav", ".flac")):
-        return "audio"
-    if low.endswith((".ttf", ".otf", ".ttc")):
-        return "font"
-    if low.endswith((".avi", ".mp4", ".webm", ".mkv")):
-        return "video"
-    if low.endswith((".json", ".txt", ".csv", ".xml", ".yaml", ".yml")):
-        return "data"
-    return "other"

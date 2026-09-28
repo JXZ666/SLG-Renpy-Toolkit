@@ -39,13 +39,13 @@
         │
         ├─ fontscan.recon() / font_inventory()   正则扫 .rpyc / .rpa 负载找字体引用（不 unpickle）
         │
-        ├─ cmd_fontfix.run()  (:1493)
+        ├─ cmd_fontfix.run()  (:1497)
         │     ├─ analyse()                     逐字体决策 keep-latin / noto-only / skip
         │     ├─ _legacy_plan()                旧引擎：生成合并任务清单
-        │     ├─ install()  (:1346)            ★先 prepare 全部 feature，全成功才 apply
+        │     ├─ install()  (:1350)            ★先 prepare 全部 feature，全成功才 apply
         │     │     ├─ _prepare_font()          (7.6+)  写 zz_localization.rpy + 全量 Noto
         │     │     └─ _prepare_font_legacy()   (6–7.5) 合并字形 + 写 SHIM_REPLACEMENT
-        │     └─ revert()   (:1462)            按 manifest 撤销，校验 sha256 后才还原隔离文件
+        │     └─ revert()   (:1466)            按 manifest 撤销，校验 sha256 后才还原隔离文件
         │
         └─ proj.py                             工作区 + 安装账本
               ├─ work_root  %LOCALAPPDATA%\rpykit
@@ -56,7 +56,7 @@ GUI 的 `simulation.py` **不是假数据**：它把游戏整树复制到 `%TEMP
 
 ### 关键设计约束（改代码时别破坏）
 
-- **`install()` 的先准备后应用 + 快照回滚**（`cmd_fontfix.py:1346-1421`）：任何 feature 的 prepare 失败就一个字节都不写。apply 前把所有目标 + manifest + quarantine 快照到临时目录，异常则整体还原。这是数据安全的核心，不要为了「少写点代码」拆掉。
+- **`install()` 的先准备后应用 + 快照回滚**（`cmd_fontfix.py:1350-1427`）：任何 feature 的 prepare 失败就一个字节都不写。apply 前把所有目标 + manifest + quarantine 快照到临时目录，异常则整体还原。这是数据安全的核心，不要为了「少写点代码」拆掉。
 - **`compat.survey` 绝不执行游戏代码**：只读文件内容做静态判断。
 - **`fontscan` 绝不 unpickle**：只对解压后的负载跑正则。
 - **`rpa.py` 只用标准库**：不要 import 项目内其他模块。
@@ -69,16 +69,15 @@ GUI 的 `simulation.py` **不是假数据**：它把游戏整树复制到 `%TEMP
 |---|---|---|
 | `app_main.py` | CLI 入口 | `main(argv)` :99 |
 | `app_window.py` | GUI 入口垫片 | 转发 `argv[0]` |
-| `appgui.py` | CustomTkinter 界面（侧栏 + 5 个堆叠页） | `App` :728, `main()` :1620 |
+| `appgui.py` | CustomTkinter 界面（侧栏 + 5 个堆叠页） | `App` :698, `main()` :1583 |
 | `app_state.py` | 界面偏好持久化 | `%LOCALAPPDATA%\rpykit\ui_state.json`，`SCHEMA_VERSION=1` |
 | `features.py` | **静态**功能目录（**只有 2 项**：`fontfix`、`intro`） | `CATALOG` :23, `ids()`, `default_selection()` |
 | `compat.py` | 引擎预检 + 机制路由 | `survey()` :352 |
 | `rpa.py` | RPA-3.0 安全读取 | `load_index()`, `read_entry()`, `extract_entry(archive, entry, dest_root, name)`, `_unsafe_name_reason()`, `_safe_member_path()` |
 | `proj.py` | 工作区 + 安装账本 | `work_dir_for()` :73, `load_manifest()` :170 |
-| `cmd_fontfix.py` | 安装/卸载/回滚总控（68 KB，最重） | `run()` :1493, `install()` :1346, `revert()` :1462, `_safe_join()` :411 |
+| `cmd_fontfix.py` | 安装/卸载/回滚总控（68 KB，最重） | `run()` :1497, `install()` :1350, `revert()` :1466, `_safe_join()` :411 |
 | `font_merge.py` | 把 CJK 合并进游戏字体（旧引擎） | `merge_font()` :289, `install_cached()` :461, `fonttools_available()` :105 |
-| `font_subset.py` | Unicode 子集生成 | `subset_font()` :120 — **当前无人调用，见坑 4** |
-| `fontdb.py` | 标准库 cmap 读取（无需 fontTools） | `codepoints()` :134, `cjk_count()` :166 |
+| `fontdb.py` | 标准库 cmap 读取（无需 fontTools） | `codepoints()` :125, `cjk_count()` :148 |
 | `fontscan.py` | 在 .rpyc/.rpa 中找字体引用 | `recon()` :240, `font_inventory()` :179 |
 | `simulation.py` | 隔离副本安装 + 启动 | `prepare()` :383, `SimulationSession` :195 |
 
@@ -142,11 +141,11 @@ python tests/test_install.py && python tests/test_simulation.py
 1. **绝不能一刀切拒绝 `/`**。真实 RPA 索引里就是嵌套相对路径（`game/script.rpyc`、`images/bg/room.png`），现有测试夹具也是 `game/test.rpy`。只拒绝绝对路径、盘符、UNC 和 `..` 段。有测试专门断言 `game/weird..name.png` 这种「段内合法含点」的名字必须**被接受**。
 2. **`os.path.isabs()` 在 Python 3.13 上对 `/etc/passwd` 返回 False**（已在本机 3.13.12 实测）。只靠 `isabs` 会漏掉 POSIX 绝对路径。所以额外显式检查规范化后是否以 `/` 开头 —— 这一条与宿主平台和 Python 版本无关。
 
-### 坑 4 `font_subset.py` 是死代码
+### 坑 4 字体子集化的前置条件
 
-模块完整、有测试、逻辑正确，但 `import font_subset` 全仓只出现在 `tests/test_font_subset.py`。装补丁时实际是把 **17.77 MB** 的全量 Noto 拷进游戏。
+模块完整、逻辑正确，但已删除：装补丁时实际是把 **17.77 MB** 的全量 Noto 拷进游戏。
 
-**为什么暂缓接入**：`subset_font()` 需要调用方给出「要保留哪些码点」，但**安装时这个集合不可知**。`cmd_fontfix._legacy_plan` 里的 `cjk` 字段来自 `fontdb.codepoints()`，那是**游戏自带字体的中文覆盖量**，不是游戏将渲染的文本。真正要渲染的汉字来自之后才打的中文补丁。喂空集/猜测集会**静默丢字形、渲染成豆腐块** —— 比占磁盘严重得多。
+**为什么暂缓接入**：子集化需要调用方给出「要保留哪些码点」，但**安装时这个集合不可知**。`cmd_fontfix._legacy_plan` 里的 `cjk` 字段来自 `fontdb.codepoints()`，那是**游戏自带字体的中文覆盖量**，不是游戏将渲染的文本。真正要渲染的汉字来自之后才打的中文补丁。喂空集/猜测集会**静默丢字形、渲染成豆腐块** —— 比占磁盘严重得多。
 
 要接入就得先能扫描「游戏将来实际会显示的中文文本」，在那之前不要接。
 

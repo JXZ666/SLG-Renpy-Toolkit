@@ -60,6 +60,11 @@ ALLOWED_HITS = (
     r"D:\temp",
     r"C:/games",
     r"C:\Users\x",
+    # Doubled backslashes as they appear in source: the example in rpa.py's
+    # drive-letter rejection and the matching fixture in tests/test_rpa.py.
+    # Both name nobody.
+    r"C:\\x",
+    r"C:\\Windows\\x",
     "AppData\\Local",
     "AppData/Local",
     "example.com",
@@ -95,10 +100,18 @@ def _tracked():
 
 
 def _read(path):
-    """File text, or None when the file is binary or unreadable."""
+    """File text, or None when the file is binary or unreadable.
+
+    A file deleted from the working tree but not yet staged is still in
+    `git ls-files --cached`, so a missing file is expected here rather than an
+    error - otherwise the scan cannot run before staging a deletion.
+    """
     full = os.path.join(REPO, path)
-    with open(full, "rb") as f:
-        raw = f.read()
+    try:
+        with open(full, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return None
     if b"\x00" in raw[:8192]:
         return None
     return raw.decode("utf-8", errors="replace")

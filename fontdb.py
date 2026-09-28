@@ -20,15 +20,6 @@ _LATIN = (0x0020, 0x007E)
 # with a handful of borrowed ideographs does not.
 CJK_FONT_THRESHOLD = 3000
 
-REPORT_RANGES = {
-    "CJK 统一表意": _CJK_UNIFIED,
-    "CJK 扩展A": (0x3400, 0x4DBF),
-    "CJK 标点": (0x3000, 0x303F),
-    "全角形式": (0xFF00, 0xFFEF),
-    "CJK 扩展B+": (0x20000, 0x2FA1F),
-    "拉丁 (ASCII)": _LATIN,
-}
-
 
 def _tables(data):
     tag = data[:4]
@@ -154,15 +145,6 @@ def codepoints(src):
     return out
 
 
-def coverage(cps):
-    """{label: (have, total)} over the ranges that decide readability."""
-    out = {}
-    for label, (a, z) in REPORT_RANGES.items():
-        have = sum(1 for c in range(a, z + 1) if c in cps)
-        out[label] = (have, z - a + 1)
-    return out
-
-
 def cjk_count(cps):
     return sum(1 for c in range(_CJK_UNIFIED[0], _CJK_UNIFIED[1] + 1) if c in cps)
 
@@ -175,10 +157,3 @@ def latin_complete(cps):
     a range the face cannot fill produces blanks - so the gate matters.
     """
     return all(c in cps for c in range(_LATIN[0], _LATIN[1] + 1))
-
-
-def describe(cps):
-    cov = coverage(cps)
-    have, total = cov["CJK 统一表意"]
-    return "cjk %d/%d, latin %s" % (
-        have, total, "complete" if latin_complete(cps) else "partial")

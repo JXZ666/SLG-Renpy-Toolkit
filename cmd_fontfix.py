@@ -1283,8 +1283,12 @@ def _revert_font(game_dir, work, manifest):
     # it away - and only when nothing else has since put something in it.
     locdir = os.path.join(game_dir, "game", "localization")
     if os.path.isdir(locdir) and not os.listdir(locdir):
-        os.rmdir(locdir)
-        removed.append("game/localization/")
+        try:
+            os.rmdir(locdir)
+        except OSError:
+            pass
+        else:
+            removed.append("game/localization/")
     return removed, []
 
 
@@ -1505,6 +1509,7 @@ def run(args):
         manifest = proj.load_manifest(work)
         _check_manifest_game(game_dir, manifest)
         revert(game_dir, work)
+        args.outcome = "changed"
         return 0
 
     if args.mode not in ("luna", "full"):
@@ -1582,6 +1587,7 @@ def run(args):
     # only when no selected feature has anything left to do.
     if not (aliased and "fontfix" in selected) and "intro" not in selected:
         print("[S6] every face already covers Chinese; nothing to do")
+        args.outcome = "no_changes"
         return 0
 
     mechanism = support.get("fontfix", {}).get("mechanism")
@@ -1623,4 +1629,5 @@ def run(args):
         })
 
     print("[S6] OK - start the game to verify; `SLG-Renpy-Toolkit --revert` undoes it")
+    args.outcome = "dry_run" if args.dry_run else "changed"
     return 0
