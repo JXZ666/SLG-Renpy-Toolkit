@@ -4,7 +4,7 @@
 
 - 快照时间：2026-09-28
 - 版本：`branding.py:19` `APP_VERSION = "1.0.0"`（唯一版本来源）
-- 测试现状：`python -m pytest tests -q` → `42 passed, 4 subtests passed`，**但这只覆盖一半测试文件**（见「坑 2」）
+- 测试现状：`python -m pytest tests -q` → `58 passed, 13 subtests passed`，覆盖全部 10 个测试文件
 
 ---
 
@@ -73,7 +73,7 @@ GUI 的 `simulation.py` **不是假数据**：它把游戏整树复制到 `%TEMP
 | `app_state.py` | 界面偏好持久化 | `%LOCALAPPDATA%\rpykit\ui_state.json`，`SCHEMA_VERSION=1` |
 | `features.py` | **静态**功能目录（**只有 2 项**：`fontfix`、`intro`） | `CATALOG` :23, `ids()`, `default_selection()` |
 | `compat.py` | 引擎预检 + 机制路由 | `survey()` :352 |
-| `rpa.py` | RPA-3.0 安全读取 | `load_index()` :186, `read_entry()` :224, `extract_entry()` :258 |
+| `rpa.py` | RPA-3.0 安全读取 | `load_index()`, `read_entry()`, `extract_entry(archive, entry, dest_root, name)`, `_unsafe_name_reason()`, `_safe_member_path()` |
 | `proj.py` | 工作区 + 安装账本 | `work_dir_for()` :73, `load_manifest()` :170 |
 | `cmd_fontfix.py` | 安装/卸载/回滚总控（68 KB，最重） | `run()` :1493, `install()` :1346, `revert()` :1462, `_safe_join()` :411 |
 | `font_merge.py` | 把 CJK 合并进游戏字体（旧引擎） | `merge_font()` :289, `install_cached()` :461, `fonttools_available()` :105 |
@@ -103,33 +103,44 @@ Exception: config.font_name_map is not a known configuration variable.
 
 **纪律：改完源码必须重新构建，并且要在产物 exe 上实测，不能只跑源码。** 仓库里 0.9-era 的 `dist/SLG-Renpy-Toolkit.exe`（09:11）和 `build/`（09-19）都是陈旧残留，不要拿来判断当前行为。
 
-### 坑 2 ★ 测试闸门只跑一半
+### 坑 2 ★ 测试闸门曾只跑一半（已修复，2026-09-28）
 
-`python -m pytest tests -q` 只收集 **5/10** 个文件，共 42 项：
+**历史情况**：`python -m pytest tests -q` 只收集 **5/10** 个文件，共 42 项。另外 5 个是 `check()` 脚本式（`__main__` 里跑断言），pytest 不识别，从不被执行：
 
 ```
-被收集：test_app_state  test_font_merge  test_font_subset  test_release  test_rpa
-未收集：test_compat     test_fontfix     test_gui          test_install  test_simulation
+未收集过：test_compat  test_fontfix  test_gui  test_install  test_simulation
 ```
-
-未收集的 5 个是 `check()` 脚本式（`__main__` 里跑断言），pytest 不会识别。
 
 **这正是坑 1 能泄漏到发布包的原因**：`tests/test_compat.py:217-232` **早就写好了**机制路由断言（`route-old` → `font_replacement_map`），但从不被默认闸门执行。*断言存在 ≠ 断言被执行。*
 
-**纪律：跑测试要两份都跑。**
+**现在怎么修的**（不要退回去）：
+
+- `tests/test_script_suites.py`：把 5 个脚本式测试的 `main()` 逐个包成 pytest 用例，断言返回值为 `0`。**没有改动那 5 个文件本身**，它们仍可脱离 pytest 直接跑。
+- `tests/test_mechanism_routing.py`：端到端路由回归测试。它**真的跑一次安装**再读盘上的 `game/zz_localization.rpy`，断言 7.5.3 的树里只有 `config.font_replacement_map[`、没有 `config.font_name_map[`，7.6+ 反向断言。
+
+**这份回归测试验证过「能失败」**：把 `compat._feature_support` 的 legacy 分支改成返回 `font_name_map`（即复现原事故），`test_mechanism_routing.py` 立刻挂 2 项；改回后全绿。新增测试时请保持这个标准 —— **不能失败的测试等于没有测试。**
+
 ```bash
-python -m pytest tests -q
+python -m pytest tests -q          # 58 passed，覆盖全部 10 个文件
+# 仍然可以单独跑（脚本式）
 python tests/test_compat.py && python tests/test_fontfix.py && python tests/test_gui.py
 python tests/test_install.py && python tests/test_simulation.py
 ```
 
-### 坑 3 RPA 索引名未做路径校验（埋着的雷，当前不可利用）
+### 坑 3 RPA 索引名路径校验（已加固，2026-09-28）
 
-`rpa.py:_validated_index`（:151-154）只拒绝空名、超长名、含 `\x00` 的名，**不拒绝 `..`、绝对路径、盘符**。`../..` 形态的条目名能通过校验。`rpa.py:extract_entry`（:258）也是无包含性检查直接写盘。
+**曾经的状态**：`rpa.py:_validated_index` 只拒绝空名、超长名、含 `\x00` 的名，**不拒绝 `..`、绝对路径、盘符**；`extract_entry` 也是无包含性检查直接写盘。始终**没有实际漏洞**，因为 `extract_entry` **零调用点**（所有消费者只调 `load_index`/`read_entry` 并把字节留在内存），属于纵深防御。
 
-**当前无实际漏洞**：全仓 `grep -rn extract_entry` 只有它自己的定义，**零调用点**；所有消费者（`fontscan.py`）只调 `load_index`/`read_entry` 并把字节留在内存，不落盘。
+**加固内容**：
 
-修的时候注意：**真实 RPA 索引里就是嵌套相对路径**（`game/script.rpyc`、`images/bg/room.png`），现有测试夹具也是 `game/test.rpy`。**一刀切拒绝 `/` 是错的**，只需拒绝绝对路径、盘符、UNC 和 `..` 段。项目里已有参考实现 `cmd_fontfix._safe_join()`（:411，`realpath` + `commonpath` + `islink`），但 `rpa.py` 要保持零依赖，不能 import 它。
+- `rpa.py` 新增 `_unsafe_name_reason(name)`：拒绝绝对路径、盘符（`C:\x` 与驱动器相对 `C:x`）、UNC、以及任何 `..` 路径段。`_validated_index` 在 `\x00` 检查之后调用它。
+- `rpa.py` 新增 `_safe_member_path(root, rel)`：私有镜像 `cmd_fontfix._safe_join` 的算法（逐段 `islink` 检查 + `realpath` + `commonpath`），**`rpa.py` 保持零项目依赖，没有 import `cmd_fontfix`**。
+- `extract_entry` 签名改为 `extract_entry(archive_path, entry, dest_root, name)`：目的根目录显式传入，条目名单独给（因为 `(off, dlen, start)` 元组不携带名字，而 `load_index` 的返回形状被测试固定住）。包含性检查在任何 `makedirs`/写入**之前**执行。
+
+**两条踩过的坑，改这块时别踩回去**：
+
+1. **绝不能一刀切拒绝 `/`**。真实 RPA 索引里就是嵌套相对路径（`game/script.rpyc`、`images/bg/room.png`），现有测试夹具也是 `game/test.rpy`。只拒绝绝对路径、盘符、UNC 和 `..` 段。有测试专门断言 `game/weird..name.png` 这种「段内合法含点」的名字必须**被接受**。
+2. **`os.path.isabs()` 在 Python 3.13 上对 `/etc/passwd` 返回 False**（已在本机 3.13.12 实测）。只靠 `isabs` 会漏掉 POSIX 绝对路径。所以额外显式检查规范化后是否以 `/` 开头 —— 这一条与宿主平台和 Python 版本无关。
 
 ### 坑 4 `font_subset.py` 是死代码
 
@@ -156,6 +167,7 @@ python tests/test_install.py && python tests/test_simulation.py
 3. **高风险 / 缺规格的功能不做伪实现**（「解锁」类尤其）。宁可功能少，不可假装有。
 4. **保留历史改动**：仓库里有 0.9-era 的模拟运行与打包脚本，不要为了整洁删掉。
 5. **撤销必须安全**：`revert()` 依赖 manifest 记录的所有权证明（sha256 校验通过才还原），不要绕过。
+6. **新增的测试必须能失败**。写完先故意把被测逻辑改坏一次，确认测试挂掉，再改回来。这条是从坑 1/坑 2 来的教训：当时断言写好了、也从没运行过，等于没有。
 
 ---
 
@@ -194,8 +206,8 @@ build_exe.bat
 | 项 | 状态 | 备注 |
 |---|---|---|
 | py2.7 实测 | **未验证** | `compat.py` 自己写着「本工具从未在 py2 上实测过」。本 game 就是 py2.7，只能靠真机启动关闭这条 |
-| RPA 路径校验加固 | 待做 | 见坑 3，纵深防御 |
-| 测试闸门补齐 | 待做 | 见坑 2，让 pytest 覆盖全部 10 个文件 |
+| RPA 路径校验加固 | **已完成** | 见坑 3，纵深防御 |
+| 测试闸门补齐 | **已完成** | 见坑 2，pytest 现覆盖全部 10 个文件 |
 | 界面重构 | 待启动 | 用户认为现界面不佳；需先锁定 `prototype` 形态再动手 |
 | 字体子集化 | **有意暂缓** | 见坑 4，前置条件是能扫描游戏将渲染的中文文本 |
 | OTF/CFF 基字体 | **无覆盖** | `font_merge` 只有 TrueType 路径有测试，OTF 基字体走同一条码路径但未验证 |
@@ -206,8 +218,7 @@ build_exe.bat
 
 ```bash
 cd rpykit-luna
-python -m pytest tests -q                    # 42 项，但只覆盖一半文件
-python tests/test_compat.py                  # 另跑这 5 个脚本式测试
+python -m pytest tests -q                    # 58 项，覆盖全部 10 个测试文件
 python app_window.py                         # 起 GUI
 python app_main.py "<游戏目录>"               # 起 CLI
 python prototype/app_prototype.py            # 看界面设计稿（假数据）

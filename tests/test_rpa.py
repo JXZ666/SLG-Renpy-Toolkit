@@ -78,6 +78,14 @@ class RpaIndexTests(unittest.TestCase):
     def archive_path(self, name="test.rpa"):
         return os.path.join(self.tmp.name, name)
 
+    def archive_with_name(self, path, name, body=BODY, key=KEY):
+        """Write an archive whose index holds a single entry called `name`."""
+        header_size = len(b"RPA-3.0 %016x %08x\n" % (0, key))
+        index_offset = header_size + len(body)
+        index = {name: [(header_size ^ key, len(body) ^ key, b"")]}
+        _archive(path, pickle.dumps(index, protocol=4), body=body, key=key)
+        return index_offset
+
     def test_modern_renpy_index_is_read_and_entry_data_is_unchanged(self):
         path = self.archive_path()
         _modern_archive(path, protocol=4)
@@ -196,6 +204,52 @@ class RpaIndexTests(unittest.TestCase):
                 rpa.load_index(path)
         finally:
             rpa.MAX_PICKLE_OPS = original_limit
+
+    def test_index_entry_names_reject_traversal_and_absolute_paths(self):
+        unsafe = (b"../../evil.rpy", b"/etc/passwd", b"C:\\Windows\\x",
+                  b"a/../b", b"..\\..\\x", b"a\\..\\..\\b")
+        for i, raw in enumerate(unsafe):
+            name = raw.decode("ascii")
+            with self.subTest(name=name):
+                path = self.archive_path("unsafe-%d.rpa" % i)
+                self.archive_with_name(path, name)
+                with self.assertRaisesRegex(rpa.RpaError, "index entry"):
+                    rpa.load_index(path)
+
+    def test_index_entry_names_allow_nested_relative_paths(self):
+        safe = ("game/script.rpy", "images/bg/room.png", "game/weird..name.png")
+        for i, name in enumerate(safe):
+            with self.subTest(name=name):
+                path = self.archive_path("safe-%d.rpa" % i)
+                self.archive_with_name(path, name)
+                index = rpa.load_index(path)
+                self.assertIn(name, index)
+
+    def test_extract_entry_confines_writes_to_destination_root(self):
+        path = self.archive_path()
+        self.archive_with_name(path, "images/bg/room.png")
+        entry = rpa.load_index(path)["images/bg/room.png"]
+
+        root = os.path.join(self.tmp.name, "out")
+        written = rpa.extract_entry(path, entry, root, "images/bg/room.png")
+        self.assertEqual(written, len(BODY))
+        dest = os.path.join(root, "images", "bg", "room.png")
+        with open(dest, "rb") as f:
+            self.assertEqual(f.read(), BODY)
+        # Nothing was created outside the destination root.
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "images")))
+
+    def test_extract_entry_rejects_escaping_name_without_writing(self):
+        path = self.archive_path()
+        self.archive_with_name(path, "game/keep.rpy")
+        entry = rpa.load_index(path)["game/keep.rpy"]
+
+        root = os.path.join(self.tmp.name, "out-escape")
+        escaped = os.path.join(self.tmp.name, "escaped.rpy")
+        with self.assertRaisesRegex(rpa.RpaError, "path segment"):
+            rpa.extract_entry(path, entry, root, "../escaped.rpy")
+        self.assertFalse(os.path.exists(escaped))
+        self.assertFalse(os.path.isdir(root))
 
 
 if __name__ == "__main__":

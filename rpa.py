@@ -138,6 +138,34 @@ def _load_data_pickle(data):
         raise RpaError("index pickle could not be parsed") from e
 
 
+def _unsafe_name_reason(name):
+    """Return why `name` is not a safe relative entry path, else None.
+
+    The RPA index is untrusted third-party pickle input. Names are not used as
+    filesystem paths by any caller today, but rejecting escaping forms here
+    means a future caller (e.g. extract_entry) can trust every name to be a
+    contained relative path. Nested names such as "game/script.rpyc" are
+    legitimate and must stay legal; only absolute/drive/UNC names and ".."
+    path segments are refused.
+    """
+    if os.path.isabs(name) or os.path.splitdrive(name)[0]:
+        return "an absolute path"
+    # Normalize separators so both "a/../b" and "a\\..\\b" are caught, and so
+    # a Windows-style UNC name ("\\\\host\\share") folds to a leading "//".
+    # A leading separator is rejected explicitly: some ntpath versions (e.g.
+    # Python 3.13) no longer treat "/etc/passwd" as absolute, but joining it to
+    # a root still escapes the root.
+    normalized = name.replace("\\", "/")
+    if normalized.startswith("/"):
+        return "an absolute path"
+    first = normalized.split("/", 1)[0]
+    if len(first) >= 2 and first[1] == ":" and first[0].isalpha():
+        return "an absolute path"  # "C:\\x" or drive-relative "C:x"
+    if ".." in normalized.split("/"):
+        return "a .. path segment"
+    return None
+
+
 def _validated_index(index, key, index_offset, header_size):
     if not isinstance(index, dict):
         raise RpaError("index root is not a dictionary")
@@ -152,6 +180,10 @@ def _validated_index(index, key, index_offset, header_size):
             raise RpaError("index contains an invalid entry name")
         if "\x00" in name:
             raise RpaError("index contains an invalid entry name")
+        # Names must be contained relative paths (see _unsafe_name_reason).
+        reason = _unsafe_name_reason(name)
+        if reason is not None:
+            raise RpaError("index entry %r has %s" % (name[:80], reason))
         if not isinstance(variants, (list, tuple)):
             raise RpaError("index entry %r has an invalid record list" % name[:80])
         if not variants:
@@ -255,8 +287,46 @@ def read_entry(archive_path, entry):
     return prefix + body
 
 
-def extract_entry(archive_path, entry, dest_path):
-    """Write one entry to dest_path. Returns byte count written."""
+def _safe_member_path(root, rel):
+    """Resolve `rel` under `root`, refusing traversal and symlink escapes.
+
+    Private mirror of cmd_fontfix._safe_join: rpa.py must stay stdlib-only and
+    must not import project modules. Separators and nesting are allowed (real
+    archives store e.g. "game/script.rpyc"); only escaping forms are refused.
+    """
+    if not isinstance(rel, str) or not rel:
+        raise RpaError("entry name is not a relative path: %r" % (rel,))
+    reason = _unsafe_name_reason(rel)
+    if reason is not None:
+        raise RpaError("entry name %r has %s" % (rel[:80], reason))
+    parts = rel.replace("\\", "/").split("/")
+    if any(p in ("", ".") for p in parts):
+        raise RpaError("entry name is not a relative path: %r" % (rel[:80],))
+
+    base = os.path.realpath(os.path.abspath(root))
+    path = base
+    for part in parts:
+        path = os.path.join(path, part)
+        if os.path.islink(path):
+            raise RpaError("entry path crosses a symbolic link: %r" % (rel[:80],))
+    path = os.path.realpath(path)
+    try:
+        inside = os.path.normcase(os.path.commonpath((base, path))) == os.path.normcase(base)
+    except ValueError:
+        inside = False
+    if not inside:
+        raise RpaError("entry path escapes its destination root: %r" % (rel[:80],))
+    return path
+
+
+def extract_entry(archive_path, entry, dest_root, name):
+    """Write index `name` from `entry` under dest_root. Returns bytes written.
+
+    The destination is `dest_root` plus the (already validated) entry name; the
+    joined path is contained under dest_root before any directory is created or
+    file written, so an escaping name cannot touch anything outside the root.
+    """
+    dest_path = _safe_member_path(dest_root, name)
     data = read_entry(archive_path, entry)
     d = os.path.dirname(dest_path)
     if d:
