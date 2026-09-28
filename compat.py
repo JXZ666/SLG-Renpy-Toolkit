@@ -39,7 +39,7 @@ def _cf():
 
 # `game/script_version.txt` is the cheapest source: a bare tuple the engine
 # writes on every save-compatible build, e.g. "(7, 4, 11)". It is not always
-# there (Game-B ships without one), so there are three fallbacks behind it.
+# there (some builds ship without one), so there are three fallbacks behind it.
 #
 # The two Ren'Py generations disagree about where the version lives, and both
 # shapes are indented, so no pattern here may anchor on column zero:

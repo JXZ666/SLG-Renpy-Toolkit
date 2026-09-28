@@ -13,11 +13,14 @@ Exit status is non-zero when anything needs a human look, so it can gate a
 commit. Findings are reported as file:line plus the reason; nothing is
 rewritten - this tool only reads.
 
-The allowlist below covers placeholder paths that are deliberately generic
-(`D:\\Games\\SomeGame` in the README examples, `C:\\Users\\x` in the test
-fixtures). Adding an entry is a judgement call: if a hit names a real person,
+The allowlist below covers placeholder paths that are deliberately generic -
+the example game directory in the README, the fake profile path in the test
+fixtures. Adding an entry is a judgement call: if a hit names a real person,
 a real machine or a real game, it belongs in the code as a placeholder, not in
 this list.
+
+This file deliberately writes no literal drive letter, so the scan does not
+have to special-case itself.
 """
 
 import os
@@ -32,9 +35,13 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ESCAPE_TAIL = re.compile(r"^[A-Za-z]:[\\/][nrtbfvaxuUN0'\"\\]$")
 
 # Absolute paths, in the spellings a Windows or POSIX machine actually produces.
+#
+# There is no UNC pattern on purpose. Source that builds a path by hand writes
+# `%LOCALAPPDATA%\\rpykit\\sim`, whose doubled backslashes are indistinguishable
+# from a `\\\\server\\share` prefix, so the check would fire on this tool's own
+# output far more often than on anything personal.
 SHAPES = (
     ("windows absolute path", re.compile(r"\b[A-Za-z]:[\\/][^\s\"'`)]*")),
-    ("UNC path", re.compile(r"\\\\[A-Za-z0-9._-]+\\[^\s\"'`)]*")),
     ("POSIX home directory", re.compile(r"/(?:home|Users)/[A-Za-z0-9._-]+")),
     ("email address",
      re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
@@ -76,8 +83,14 @@ SKIP_SUFFIXES = (
 
 
 def _tracked():
+    """Every file a commit could pick up, staged or not.
+
+    `--others` matters: a leak is usually introduced by a brand-new file, which
+    plain `ls-files` would not list until after it had already been staged.
+    """
     out = subprocess.check_output(
-        ["git", "-C", REPO, "ls-files"], text=True)
+        ["git", "-C", REPO, "ls-files", "--cached", "--others",
+         "--exclude-standard"], text=True)
     return [line for line in out.splitlines() if line.strip()]
 
 

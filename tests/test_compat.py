@@ -4,7 +4,7 @@ Every fact survey() reports comes from a different file, and the shapes are not
 uniform across Ren'Py generations - which is exactly how this went wrong the
 first time it was written against real games:
 
-  * game/script_version.txt is the easy source, but Game-B ships without one;
+  * game/script_version.txt is the easy source, but some builds omit it;
   * Ren'Py 8 puts `version = '8.3.0.24082114'` in renpy/vc_version.py;
   * Ren'Py 7 puts `version_tuple = (7, 4, 11, vc_version)` in
     renpy/__init__.py, and indents it, so an anchored pattern misses it;
