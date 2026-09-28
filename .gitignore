@@ -17,3 +17,8 @@ _work/
 # never committed even though this tool does not read it.
 config.local.toml
 state.json
+
+# pip drops this beside the working directory when it runs with a relative cache
+# dir, so a routine `pip install -r requirements.txt` from the repo root would
+# otherwise stage a few MB of downloaded wheels.
+/pip/

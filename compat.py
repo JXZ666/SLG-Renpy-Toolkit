@@ -20,6 +20,7 @@ user picks a different folder.
 import os
 import re
 
+import font_merge
 import rpa
 
 
@@ -288,16 +289,50 @@ def _feature_support(game_dir):
     font_map = _api_assignment(config, "font_name_map")
     label_overrides = _api_assignment(config, "label_overrides")
     font_group = _font_group_add(game_dir)
+    replacement = _api_assignment(config, "font_replacement_map")
 
+    # There are two ways to make Chinese drawable, and which one this engine
+    # has decides the *shape* of what gets installed, not merely whether it
+    # works:
+    #
+    #   font_name_map        Ren'Py 7.6 and later. Points a font name at a
+    #                        FontGroup at runtime, so nothing is generated on
+    #                        disk and the game's own faces are left untouched.
+    #
+    #   font_replacement_map Ren'Py 6 through 7.5. Resolved inside
+    #                        renpy/text/font.py:get_font, and its value has to
+    #                        be loadable as a font *file*. The Hanzi therefore
+    #                        have to be merged into the game's own face when
+    #                        the tool installs, which is why this route also
+    #                        requires fontTools - an optional dependency.
+    #
+    # The group route is preferred, not merely newer: the merge route writes a
+    # multi-megabyte font for every face the game actually uses.
     font_reasons = []
-    if font_map is not True:
+    mechanism = None
+    if font_map is True and font_group is True:
+        mechanism = "font_name_map"
+    elif replacement is True:
+        if font_merge.fonttools_available():
+            mechanism = "font_replacement_map"
+        else:
+            font_reasons.append(
+                "This is Ren'Py 7.5 or older, where a font can only be fixed by "
+                "merging Hanzi into it; that needs fontTools. Install it with: "
+                "python -m pip install fonttools")
+    else:
         font_reasons.append(
-            "Ren'Py config.font_name_map is %s in renpy/config.py; fontfix "
-            "cannot install safely." % ("missing" if font_map is False else "unknown"))
-    if font_group is not True:
+            "Ren'Py config.font_name_map is %s in renpy/config.py"
+            % ("missing" if font_map is False else "unknown"))
+        if font_group is not True:
+            font_reasons.append(
+                "Ren'Py FontGroup.add(font, start, end) is %s in "
+                "renpy/text/font.py"
+                % ("missing" if font_group is False else "unknown"))
         font_reasons.append(
-            "Ren'Py FontGroup.add(font, start, end) is %s in "
-            "renpy/text/font.py." % ("missing" if font_group is False else "unknown"))
+            "Ren'Py config.font_replacement_map is %s in renpy/config.py, so "
+            "there is no fallback route for an engine this old either"
+            % ("missing" if replacement is False else "unknown"))
 
     intro_reasons = []
     if label_overrides is not True:
@@ -307,8 +342,10 @@ def _feature_support(game_dir):
             ("missing" if label_overrides is False else "unknown"))
 
     return {
-        "fontfix": {"supported": not font_reasons, "reasons": font_reasons},
-        "intro": {"supported": not intro_reasons, "reasons": intro_reasons},
+        "fontfix": {"supported": mechanism is not None,
+                    "mechanism": mechanism, "reasons": font_reasons},
+        "intro": {"supported": not intro_reasons, "mechanism": "label_overrides",
+                  "reasons": intro_reasons},
     }
 
 

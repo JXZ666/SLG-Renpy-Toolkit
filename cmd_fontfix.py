@@ -4,15 +4,29 @@ The tool applies one or more *features* to a game folder, each an independent
 change with its own generated file and its own undo. The catalogue lives in
 features.py; this module implements them and runs them. There are two today:
 
-  fontfix  `zz_localization.rpy` points every font name the game resolves at a
-           FontGroup that keeps the original face for Latin and draws CJK with
-           the bundled Noto, plus the font itself under game/localization/.
-           A game that renders Chinese as tofu (empty boxes) has a font
-           problem, not a translation problem - and every Chinese string,
-           whether from a tl/ block or injected into the text box at runtime by
-           an external translator, is drawn with whatever font the current
-           style names. Fixing the font once makes all of those paths work.
-           This is why it is a pre-flight step and not part of translating.
+  fontfix  `zz_localization.rpy` makes Chinese drawable. Which file it writes,
+           and whether anything else is generated, depends on the engine:
+
+             Ren'Py 7.6+  the shim points every font name the game resolves at
+                          a FontGroup that keeps the original face for Latin
+                          and draws CJK with the bundled Noto, plus the font
+                          itself under game/localization/.
+
+             Ren'Py <=7.5  has no config.font_name_map, so a name cannot be
+                          given a group - only redirected to another font
+                          *file*. The shim therefore registers
+                          config.font_replacement_map entries, and each of the
+                          game's own faces that it has to redirect has the
+                          bundled Hanzi merged into it at install time. See
+                          font_merge.py.
+
+           Either way the outcome is the same and it is one problem: a game
+           that renders Chinese as tofu (empty boxes) has a font problem, not a
+           translation problem. Every Chinese string, whether from a tl/ block
+           or injected into the text box at runtime by an external translator,
+           is drawn with whatever font the current style names, so fixing the
+           font once makes all of those paths work. This is why it is a
+           pre-flight step and not part of translating.
 
   intro    `zz_rpykit_intro.rpy` points the game's `splashscreen` label at a
            no-op, so the opening logos stop being part of every launch. It is a
@@ -48,6 +62,7 @@ import tempfile
 import compat
 import features
 import fontdb
+import font_merge
 import fontscan
 import proj
 
@@ -68,6 +83,36 @@ ASSET_FONT = _asset("NotoSansSC-VF.ttf")
 
 GAME_FONT_REL = "localization/NotoSansSC-VF.ttf"
 SHIM_REL = "zz_localization.rpy"
+
+# Fonts this tool writes into game/localization/ get this prefix, so that a
+# later run can tell its own output from the game's. It matters: the shim names
+# every file it installs, and font_inventory indexes every font under game/, so
+# without a rule like this each reinstall would find the previous generation of
+# merged fonts, treat them as faces the game ships, and alias them again.
+TOOL_FONT_PREFIX = "rpykit-"
+
+# Where merges for old engines are cached, keyed on the pair of input fonts.
+# Under the per-user work root rather than a game workspace because the key
+# already identifies the inputs exactly: two games that ship the same face -
+# which is common, since it is usually a stock Ren'Py font - share one merge.
+FONT_CACHE_DIRNAME = "fontcache"
+
+
+def _is_tool_font(name):
+    """True for a font file this tool installed, judged by its name alone.
+
+    The bundled CJK font is recognised by its full relative path and the merged
+    ones by their prefix, because a merged font is byte-unique per game and
+    cannot be identified the way `_is_ours` identifies the bundled asset.
+    """
+    base = fontscan.basename(name)
+    if base == os.path.basename(GAME_FONT_REL):
+        return True
+    return base.lower().startswith(TOOL_FONT_PREFIX)
+
+
+def _font_cache_dir():
+    return os.path.join(proj.work_root(), FONT_CACHE_DIRNAME)
 
 # The second generated file: a label override that skips the opening logos.
 # Kept separate from the shim so the two can be installed and reverted on their
@@ -247,6 +292,55 @@ LANGUAGE_BLOCK = '''
     config.language = "$lang"
 '''
 
+# The same shim for an engine that has no config.font_name_map, which is every
+# Ren'Py up to and including 7.5. A name cannot be handed a FontGroup there, so
+# there is nothing to build at runtime and nothing to remember between renders:
+# the tool has already fused the Hanzi into the game's own faces, and this file
+# only says which name should load which file.
+SHIM_REPLACEMENT = string.Template('''\
+########################################################################
+# zz_localization.rpy - font glue for Chinese text
+#
+# GENERATED BY `rpykit fontfix` - do not hand-edit, it will be regenerated.
+# Undo with:  SLG-Renpy-Toolkit --revert
+#
+# Non-destructive. This file only ADDS behaviour on top of the shipped game;
+# it never edits a game script and never repacks an archive.
+#
+# This engine predates config.font_name_map, which arrived in Ren'Py 7.6. A
+# font name is resolved to a file inside renpy/text/font.py:get_font, and the
+# one hook that runs there is config.font_replacement_map - whose value has to
+# be loadable as a font file, not a FontGroup. So each face the game uses had
+# the bundled Hanzi merged into it when this was installed, and the entries
+# below point the game's names at those merged files. The Latin glyphs in them
+# are still the game's own, so nothing about its typography changes.
+#
+# Generated: $stamp
+# Game:      $game_dir
+# Mode:      $mode
+$table_comment
+########################################################################
+
+init 999 python:
+$language_block
+    # (font name, the file that name should load instead)
+    _loc_replace = [
+$faces
+    ]
+
+    # get_font looks this up on the tuple (name, bold, italics) for every
+    # string Ren'Py draws, so styles, character definitions and inline
+    # {font=...} tags all pass through it - which is the reason this route is
+    # used at all rather than rewriting styles one by one. The bold and italics
+    # flags are carried through unchanged, so FreeType still synthesises them
+    # on top of the merged face.
+    for _loc_name, _loc_target in _loc_replace:
+        for _loc_bold in (False, True):
+            for _loc_italics in (False, True):
+                config.font_replacement_map[(_loc_name, _loc_bold, _loc_italics)] = (
+                    _loc_target, _loc_bold, _loc_italics)
+''')
+
 
 class FontFixError(Exception):
     pass
@@ -394,7 +488,11 @@ def _font_state(game_dir):
     m = re.search(r"^# Mode:\s*(\S+)", text, re.M)
     if m:
         state["mode"] = m.group(1)
-    state["current"] = "_loc_group(" in text
+    # Either template counts as current. Which one a game gets is decided by its
+    # engine rather than by this build, so both are the shape this version
+    # writes - what "not current" has to catch is a shim from an older release,
+    # which is the one that shipped before either existed.
+    state["current"] = "_loc_group(" in text or "_loc_replace" in text
     return state
 
 
@@ -534,7 +632,10 @@ def analyse(game_dir):
             # The engine's own faces. Twemoji and OpenDyslexic back features
             # that aliasing would break, and the rest are not the game's.
             continue
-        if name == os.path.basename(GAME_FONT_REL):
+        if _is_tool_font(name):
+            # Our own output from a previous install: the bundled CJK font, or
+            # a face this tool merged the Hanzi into. Either way it is not the
+            # game's and aliasing it would compound on every reinstall.
             continue
         wanted.setdefault(name, "shipped file")
         wanted.setdefault(_stem(name), "shipped file")
@@ -620,6 +721,55 @@ def _q(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _replace_block(rows):
+    return "\n".join("        (%s, %s)," % (_q(n), _q(t)) for n, t in rows) \
+        if rows else "        # (nothing to redirect)"
+
+
+def _legacy_plan(decisions, inventory):
+    """(shim rows, font jobs) for an engine that can only be given font files.
+
+    Names are grouped by the face they resolve to, exactly as the FontGroup
+    route groups them, so `Dongle-Bold` and `Dongle-Bold.ttf` share one merged
+    file rather than paying for a copy each.
+
+    A face whose own Latin is usable is merged with the Hanzi and keeps its
+    styling. A face that had to fall back - unreadable, missing, or with
+    incomplete Latin - is pointed at the plain CJK font instead, because there
+    is nothing in it worth preserving. That is the same distinction the
+    FontGroup route draws when it passes None for the Latin face, and the same
+    one `analyse` already made.
+
+    The jobs carry raw font bytes, so they are deliberately kept out of the
+    decision dictionaries: those are written into fontfix_report.json.
+    """
+    cjk_rel = "localization/%scjk.ttf" % TOOL_FONT_PREFIX
+    jobs = {}
+    rows = []
+    used = set()
+    for d in decisions:
+        if d["action"] == "skip":
+            continue
+        if d.get("latin"):
+            stem = _stem(d["latin"])
+            rel = "localization/%s%s.ttf" % (TOOL_FONT_PREFIX, stem)
+            n = 2
+            while rel in used:
+                rel = "localization/%s%s-%d.ttf" % (TOOL_FONT_PREFIX, stem, n)
+                n += 1
+            used.add(rel)
+            if rel not in jobs:
+                data, _entry = _resolve(d["latin"], inventory)
+                jobs[rel] = {"rel": rel, "kind": "merge", "data": data}
+            target = rel
+        else:
+            target = cjk_rel
+            jobs.setdefault(cjk_rel, {"rel": cjk_rel, "kind": "cjk", "data": None})
+        for name in d["names"]:
+            rows.append((name, target))
+    return rows, [jobs[k] for k in sorted(jobs)]
+
+
 def _table_comment(decisions):
     vf = {"keep-latin": "KEEP-LATIN", "keep-ascii": "KEEP-ASCII",
           "noto-only": "NOTO-ONLY", "skip": "SKIP"}
@@ -668,6 +818,40 @@ def validate_shim(text):
     # here without booting the engine. Names like FontGroup and config are
     # undefined at this point, which is fine - compile() checks syntax only.
     # This is what catches a generated font name that broke its own quoting.
+    problems.extend(_init_problems(text, "<zz_localization>"))
+    return problems
+
+
+_RE_REPLACE_ROW = re.compile(r'\(\s*"((?:[^"\\]|\\.)*)"\s*,\s*"((?:[^"\\]|\\.)*)"\s*\)')
+
+
+def validate_shim_legacy(text, expected_targets):
+    """Catch the failure modes of the font-file route.
+
+    A bad entry here is an exception at init 999, which the player sees as the
+    game not starting, so this counts as worth checking before writing. There is
+    no group to construct on this route, so what is checked is different: that
+    the map is assigned at all, and that every file a name is redirected to is
+    one this install is actually about to write. A target that does not exist
+    would leave the name pointing at a missing file, which Ren'Py reports as
+    "Could not find font" from inside a game launch.
+    """
+    code = _code_only(text)
+    problems = []
+    if "config.font_replacement_map[" not in code:
+        problems.append("no config.font_replacement_map assignment")
+
+    rows = _RE_REPLACE_ROW.findall(code)
+    if not rows:
+        problems.append("no font name is redirected to a file")
+    for name, target in rows:
+        if not target.lower().endswith(fontscan.FONT_EXTS):
+            problems.append("%s is redirected to %r, which is not a font file"
+                            % (name, target))
+        elif target not in expected_targets:
+            problems.append("%s is redirected to %r, which this install does "
+                            "not write" % (name, target))
+
     problems.extend(_init_problems(text, "<zz_localization>"))
     return problems
 
@@ -955,17 +1139,32 @@ def _guard_foreign(args, game_dir, work, targets):
 # before applying any of them, so a self-check failure in the last one cannot
 # leave the first one's files on disk.
 
-def _font_targets(game_dir):
-    return ["game/" + SHIM_REL, "game/" + GAME_FONT_REL]
+def _font_targets(game_dir, ctx):
+    """Every path this feature writes, so install() can snapshot and guard them.
+
+    On the font-file route the merged faces come from the plan the scan already
+    produced: their names depend on which faces the game actually has, so they
+    cannot be listed from the folder alone. The plan is built once in run() and
+    shared, because building it reads each face's bytes - which on a packed game
+    means pulling an entry out of a multi-gigabyte archive.
+    """
+    targets = ["game/" + SHIM_REL]
+    plan = ctx.get("legacy_plan")
+    if plan is not None:
+        return targets + ["game/" + job["rel"] for job in plan[1]]
+    return targets + ["game/" + GAME_FONT_REL]
 
 
 def _prepare_font(args, game_dir, work, ctx):
-    decisions = ctx["decisions"]
-    aliased = [d for d in decisions if d["action"] != "skip"]
     lang_block = ""
     if args.mode == "full":
         lang_block = string.Template(LANGUAGE_BLOCK).substitute(lang=args.lang)
 
+    if ctx["mechanism"] == "font_replacement_map":
+        return _prepare_font_legacy(args, game_dir, work, ctx, lang_block)
+
+    decisions = ctx["decisions"]
+    aliased = [d for d in decisions if d["action"] != "skip"]
     text = SHIM.substitute(
         stamp=ctx["stamp"], game_dir=game_dir, mode=args.mode,
         cjk_path=GAME_FONT_REL, faces=_faces_block(decisions),
@@ -1001,8 +1200,83 @@ def _prepare_font(args, game_dir, work, ctx):
     return {"problems": validate_shim(text), "apply": apply}
 
 
+def _prepare_font_legacy(args, game_dir, work, ctx, lang_block):
+    """The font-file route: one font per face, and a shim that redirects names.
+
+    Nothing about the game's own files is touched here either - the merged faces
+    are written under game/localization/ beside the shipped ones, and the game's
+    originals are left exactly as they were. Reverting is therefore just a
+    delete, exactly as on the group route.
+    """
+    decisions = ctx["decisions"]
+    aliased = [d for d in decisions if d["action"] != "skip"]
+    rows, jobs = ctx["legacy_plan"]
+    text = SHIM_REPLACEMENT.substitute(
+        stamp=ctx["stamp"], game_dir=game_dir, mode=args.mode,
+        faces=_replace_block(rows), language_block=lang_block,
+        table_comment=_table_comment(decisions))
+    expected = set(job["rel"] for job in jobs)
+    n_names = len(rows)
+
+    if args.dry_run:
+        for job in jobs:
+            if job["kind"] == "cjk":
+                # No size here on purpose: this file is instanced from the
+                # bundled variable font at install time, so the asset's own
+                # 17.8 MB would be an over-estimate (the static font is 10.6 MB)
+                # and computing the real one means doing the work dry-run exists
+                # to avoid.
+                print("[S6] dry-run: would write game/%s (static CJK, "
+                      "instanced from the bundled Noto)" % job["rel"])
+            else:
+                print("[S6] dry-run: would merge Hanzi into %s -> game/%s"
+                      % (job["data"] and "the game's face" or "?", job["rel"]))
+        print("[S6] dry-run: would write game/%s (%d names redirected, "
+              "self-check clean)" % (SHIM_REL, n_names))
+
+    def apply():
+        cache = proj.ensure_dir(_font_cache_dir())
+        for job in jobs:
+            dest = os.path.join(game_dir, "game", *job["rel"].split("/"))
+            if job["kind"] == "cjk":
+                # A static copy, not the variable original: the FreeType in a
+                # Ren'Py 7 build predates variable fonts.
+                source = font_merge.prepared_cjk(ASSET_FONT, cache)
+                _copy_atomic(source, dest)
+                print("[S6] wrote  : game/%s (%.1f MB, static CJK)"
+                      % (job["rel"], os.path.getsize(dest) / 1e6))
+            else:
+                if not job["data"]:
+                    raise FontFixError(
+                        "the face behind %s could not be read, so it cannot be "
+                        "merged; nothing was written" % job["rel"])
+                _dest, size, from_cache = font_merge.install_cached(
+                    job["data"], ASSET_FONT, dest, cache)
+                print("[S6] %s: game/%s (%.1f MB, Hanzi merged in)"
+                      % ("reused" if from_cache else "merged", job["rel"],
+                         size / 1e6))
+            proj.record_file(work, game_dir, "game/" + job["rel"],
+                             "fontfix:merged-font")
+        _write(os.path.join(game_dir, "game", SHIM_REL), text)
+        proj.record_file(work, game_dir, "game/" + SHIM_REL, "fontfix:shim")
+        print("[S6] wrote  : game/%s (%d names redirected, self-check clean)"
+              % (SHIM_REL, n_names))
+
+    return {"problems": validate_shim_legacy(text, expected), "apply": apply}
+
+
 def _revert_font(game_dir, work, manifest):
     removed = _remove_owned(game_dir, work, manifest, "game/" + SHIM_REL)
+    # The merged faces are named per game, so they cannot be listed here - but
+    # they are all recorded under one source, which is what identifies them no
+    # matter how many the last install produced.
+    for entry in manifest.get("files", []):
+        if not isinstance(entry, dict):
+            continue
+        rel = entry.get("path") or ""
+        if entry.get("source") != "fontfix:merged-font":
+            continue
+        removed += _remove_owned_file(game_dir, work, manifest, rel)
     removed += _remove_owned_file(game_dir, work, manifest,
                                   "game/" + GAME_FONT_REL)
     # Only this feature creates game/localization/, so only this feature tidies
@@ -1014,7 +1288,7 @@ def _revert_font(game_dir, work, manifest):
     return removed, []
 
 
-def _intro_targets(game_dir):
+def _intro_targets(game_dir, ctx):
     return ["game/" + INTRO_REL]
 
 
@@ -1074,7 +1348,7 @@ def install(args, game_dir, work, ctx):
     selected = features.selected(args)
     targets = []
     for fid in selected:
-        targets += _FEATURES[fid].targets(game_dir)
+        targets += _FEATURES[fid].targets(game_dir, ctx)
 
     plans, problems = [], []
     for fid in selected:
@@ -1310,7 +1584,23 @@ def run(args):
         print("[S6] every face already covers Chinese; nothing to do")
         return 0
 
+    mechanism = support.get("fontfix", {}).get("mechanism")
+    print("[S6] engine : fontfix via %s%s" % (
+        mechanism or "nothing this engine has",
+        " (Ren'Py 7.6+; font names are aliased at runtime)"
+        if mechanism == "font_name_map" else
+        " (Ren'Py <=7.5; each face gets the Hanzi merged in at install time)"
+        if mechanism == "font_replacement_map" else ""))
+
+    # Built here rather than inside prepare() so that install() can snapshot
+    # every path before anything is written: the merged faces are named after
+    # the game's own, and building the plan is what reads their bytes.
+    legacy_plan = None
+    if mechanism == "font_replacement_map":
+        legacy_plan = _legacy_plan(decisions, report["inventory"])
+
     ctx = {"report": report, "decisions": decisions, "survey": survey,
+           "mechanism": mechanism, "legacy_plan": legacy_plan,
            "stamp": datetime.datetime.now().isoformat(timespec="seconds")}
     install(args, game_dir, work, ctx)
 
@@ -1319,7 +1609,10 @@ def run(args):
             "game_dir": game_dir,
             "mode": args.mode,
             "installed": True,
-            "cjk_font": GAME_FONT_REL,
+            "mechanism": mechanism,
+            "cjk_font": GAME_FONT_REL if legacy_plan is None else None,
+            "merged_fonts": [job["rel"] for job in legacy_plan[1]]
+            if legacy_plan else [],
             "shim": "game/" + SHIM_REL,
             "intro": "game/" + INTRO_REL if "intro" in selected else None,
             "features": selected,

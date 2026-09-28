@@ -21,6 +21,7 @@ import cmd_fontfix  # noqa: E402
 class StubConfig(object):
     def __init__(self):
         self.font_name_map = {}
+        self.font_replacement_map = {}
         self.language = None
 
 
@@ -89,6 +90,21 @@ def build(decisions, mode="luna", lang="chinesesimplified"):
         faces=cmd_fontfix._faces_block(decisions),
         language_block=lang_block,
         table_comment=cmd_fontfix._table_comment(decisions))
+
+
+def build_legacy(decisions, inventory=None, mode="luna",
+                 lang="chinesesimplified"):
+    """The shim an engine without config.font_name_map gets, plus its targets."""
+    import string
+    lang_block = ""
+    if mode == "full":
+        lang_block = string.Template(cmd_fontfix.LANGUAGE_BLOCK).substitute(lang=lang)
+    rows, jobs = cmd_fontfix._legacy_plan(decisions, inventory or {})
+    text = cmd_fontfix.SHIM_REPLACEMENT.substitute(
+        stamp="test", game_dir="<test>", mode=mode,
+        faces=cmd_fontfix._replace_block(rows), language_block=lang_block,
+        table_comment=cmd_fontfix._table_comment(decisions))
+    return text, set(job["rel"] for job in jobs), jobs
 
 
 def main():
@@ -165,6 +181,77 @@ def main():
     check("validate_shim catches it",
           any("2 argument" in p for p in cmd_fontfix.validate_shim(bad)),
           cmd_fontfix.validate_shim(bad))
+
+    # --- the route an engine older than 7.6 has to take --------------------
+    #
+    # There is no group to build here, so what these check is different: that
+    # every name the game uses is redirected, that it is redirected at a file
+    # the install will actually write, and that the bold/italic flags survive
+    # into the replacement, since those are what FreeType synthesises from.
+    print("legacy engine (font_replacement_map)")
+    _CONFIG.font_replacement_map.clear()
+    _CONFIG.font_name_map.clear()
+    text, expected, _jobs = build_legacy(decisions)
+    check("self-check clean", not cmd_fontfix.validate_shim_legacy(text, expected),
+          cmd_fontfix.validate_shim_legacy(text, expected))
+    run_shim(text)
+    rmap = _CONFIG.font_replacement_map
+    check("redirects the face it merged into",
+          rmap[("DejaVuSans.ttf", False, False)][0]
+          == "localization/rpykit-DejaVuSans.ttf",
+          rmap.get(("DejaVuSans.ttf", False, False)))
+    check("redirects the extension-less stem too",
+          rmap[("tycho", False, False)][0] == rmap[("tycho.ttf", False, False)][0],
+          rmap.get(("tycho", False, False)))
+    check("a face with no usable Latin goes to the plain CJK file",
+          rmap[("tycho.ttf", False, False)][0] == "localization/rpykit-cjk.ttf",
+          rmap.get(("tycho.ttf", False, False)))
+    check("two names over one face share the merged file",
+          rmap[("DejaVuSans-Bold.ttf", False, False)][0]
+          == rmap[("DejaVuSans.ttf", False, False)][0])
+    check("a face that already covers Hanzi is left alone",
+          not any(k[0] == "SourceHanSansSC-Bold.otf" for k in rmap),
+          [k for k in rmap if k[0].startswith("Source")])
+    check("all four bold/italic combinations are registered",
+          all((n, b, i) in rmap for n in ("DejaVuSans.ttf", "tycho")
+              for b in (False, True) for i in (False, True)),
+          sorted(rmap)[:6])
+    check("the flags are carried into the value, not flattened",
+          rmap[("tycho.ttf", True, True)] == ("localization/rpykit-cjk.ttf", True, True),
+          rmap.get(("tycho.ttf", True, True)))
+    check("no group is built on this route", _CONFIG.font_name_map == {},
+          _CONFIG.font_name_map)
+
+    print("legacy engine, full mode")
+    _CONFIG.font_replacement_map.clear()
+    _CONFIG.language = None
+    text, expected, _jobs = build_legacy(decisions, mode="full")
+    run_shim(text)
+    check("still forces the language", _CONFIG.language == "chinesesimplified",
+          _CONFIG.language)
+
+    # A redirect to a file nobody writes is a launch-time "Could not find
+    # font", which is exactly the class of failure this self-check exists for.
+    print("legacy self-check")
+    check("catches a redirect to a file the install does not write",
+          any("does not write" in p for p in cmd_fontfix.validate_shim_legacy(
+              text.replace("localization/rpykit-cjk.ttf",
+                           "localization/typo.ttf"), expected)),
+          cmd_fontfix.validate_shim_legacy(
+              text.replace("localization/rpykit-cjk.ttf",
+                           "localization/typo.ttf"), expected))
+    check("catches a redirect to something that is not a font",
+          any("not a font file" in p for p in cmd_fontfix.validate_shim_legacy(
+              text.replace("localization/rpykit-cjk.ttf", "localization/notes.txt"),
+              expected)),
+          cmd_fontfix.validate_shim_legacy(
+              text.replace("localization/rpykit-cjk.ttf", "localization/notes.txt"),
+              expected))
+    check("catches the map never being touched",
+          any("no config.font_replacement_map" in p
+              for p in cmd_fontfix.validate_shim_legacy(
+                  text.replace("config.font_replacement_map[", "config.something_else["),
+                  expected)))
 
     print()
     if failures:

@@ -13,7 +13,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('assets', 'assets')] + collect_data_files('customtkinter'),
-    hiddenimports=collect_submodules('customtkinter'),
+    # fontTools resolves its table classes by tag at runtime, so static analysis
+    # does not find them; the whole package is 4.4 MB, which is cheaper than
+    # guessing which submodules the merge path touches.
+    hiddenimports=(collect_submodules('customtkinter')
+                   + collect_submodules('fontTools')),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

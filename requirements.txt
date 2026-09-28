@@ -1,4 +1,6 @@
-# GUI runtime. Versions match the 1.0.0 Windows build.
+# GUI runtime. Versions match the 1.0.0 Windows build, plus fontTools for the
+# merged-font route that Ren'Py 7.5 and older need.
 customtkinter==6.0.0
 darkdetect==0.8.0
+fonttools==4.66.0
 packaging==25.0

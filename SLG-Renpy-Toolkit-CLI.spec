@@ -2,6 +2,7 @@
 """Console CLI executable. Build via build_exe.bat for version metadata."""
 
 import os
+from PyInstaller.utils.hooks import collect_submodules
 
 version_file = os.environ.get("RPYKIT_CLI_VERSION_FILE")
 if not version_file or not os.path.isfile(version_file):
@@ -12,7 +13,10 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('assets', 'assets')],
-    hiddenimports=[],
+    # fontTools resolves its table classes by tag at runtime, so static analysis
+    # does not find them; the whole package is 4.4 MB, which is cheaper than
+    # guessing which submodules the merge path touches.
+    hiddenimports=collect_submodules('fontTools'),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

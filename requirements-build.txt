@@ -3,6 +3,7 @@
 # not inferred from the existing dist executable, which has no build-version record.
 customtkinter==6.0.0
 darkdetect==0.8.0
+fonttools==4.66.0
 packaging==25.0
 altgraph==0.17.5
 pefile==2024.8.26

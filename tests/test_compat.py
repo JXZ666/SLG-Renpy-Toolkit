@@ -29,6 +29,7 @@ sys.path.insert(0, ROOT)
 
 import cmd_fontfix  # noqa: E402
 import compat  # noqa: E402
+import font_merge  # noqa: E402
 
 REAL_GAMES = os.path.expanduser(
     os.environ.get("RPYKIT_GAMES_DIR", "~/games"))
@@ -45,7 +46,7 @@ def _w(path, text):
 def make(root, py=3, arch=("x86_64",), script_version="(8, 3, 0)",
          vc_version=None, init_tuple=None, rpa=0, rpy=(), rpyc=(),
          renpy_dir=True, font_map=True, label_overrides=True,
-         font_group=True):
+         font_group=True, replacement_map=False):
     """A plausible Ren'Py distribution skeleton, assembled to order."""
     os.makedirs(os.path.join(root, "game"), exist_ok=True)
     if renpy_dir:
@@ -54,6 +55,8 @@ def make(root, py=3, arch=("x86_64",), script_version="(8, 3, 0)",
         config = []
         if font_map:
             config.append("font_name_map = {}\n")
+        if replacement_map:
+            config.append("font_replacement_map = { }\n")
         if label_overrides:
             config.append("label_overrides = {}\n")
         _w(os.path.join(root, "renpy", "config.py"), "".join(config))
@@ -153,8 +156,8 @@ def main():
               s["renpy"]["version"] == "8.3.0", s["renpy"])
         check("the 4-part build stamp is trimmed off", "." in (s["renpy"]["version"] or "")
               and s["renpy"]["version"].count(".") == 2, s["renpy"])
-        check("the release name is kept", s["renpy"]["name"].startswith("Second"),
-              s["renpy"]["name"])
+        check("the release name is kept",
+              s["renpy"]["name"].startswith("Synthetic"), s["renpy"]["name"])
 
         # Ren'Py 7 indents version_tuple inside an if-block, which an anchored
         # pattern silently misses.
@@ -208,6 +211,61 @@ def main():
               not s["feature_support"]["fontfix"]["supported"]
               and s["feature_support"]["intro"]["supported"],
               s["feature_support"])
+
+        # --- engines that predate config.font_name_map -----------------------
+        print("font name aliasing route")
+        g = make(p("route-both"), font_map=True, font_group=True,
+                 replacement_map=True)
+        s = compat.survey(g)
+        check("an engine with both routes prefers the runtime alias",
+              s["feature_support"]["fontfix"]["supported"]
+              and s["feature_support"]["fontfix"]["mechanism"] == "font_name_map",
+              s["feature_support"]["fontfix"])
+
+        g = make(p("route-old"), py=2, script_version="(7, 4, 11)",
+                 font_map=False, font_group=False, replacement_map=True)
+        s = compat.survey(g)
+        check("a 7.4 engine is offered the replacement-map route",
+              s["feature_support"]["fontfix"]["supported"]
+              and s["feature_support"]["fontfix"]["mechanism"]
+              == "font_replacement_map",
+              s["feature_support"]["fontfix"])
+        check("no font_name_map is not itself a reason to refuse",
+              not any("font_name_map" in r
+                      for r in s["feature_support"]["fontfix"]["reasons"]),
+              s["feature_support"]["fontfix"]["reasons"])
+
+        # The merge that route needs is a third-party dependency, so it has to
+        # be probed rather than assumed - otherwise the tool offers a route it
+        # cannot run and fails halfway through an install.
+        saved = font_merge.fonttools_available
+        font_merge.fonttools_available = lambda: False
+        try:
+            s = compat.survey(g)
+            check("without fontTools the old-engine route is refused",
+                  not s["feature_support"]["fontfix"]["supported"],
+                  s["feature_support"]["fontfix"])
+            check("and the reason names the missing dependency",
+                  any("fontTools" in r
+                      for r in s["feature_support"]["fontfix"]["reasons"]),
+                  s["feature_support"]["fontfix"]["reasons"])
+        finally:
+            font_merge.fonttools_available = saved
+
+        # An engine with neither route must still be refused, and must say so
+        # about both, rather than picking one and failing at install time.
+        g = make(p("route-none"), font_map=False, font_group=False,
+                 replacement_map=False)
+        s = compat.survey(g)
+        check("an engine with neither route is refused",
+              not s["feature_support"]["fontfix"]["supported"],
+              s["feature_support"]["fontfix"])
+        check("and both routes are named in the reasons",
+              any("font_name_map" in r
+                  for r in s["feature_support"]["fontfix"]["reasons"])
+              and any("font_replacement_map" in r
+                      for r in s["feature_support"]["fontfix"]["reasons"]),
+              s["feature_support"]["fontfix"]["reasons"])
 
         g = make(p("unknown-config"))
         os.remove(os.path.join(g, "renpy", "config.py"))

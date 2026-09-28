@@ -27,9 +27,10 @@ CATALOG = [
         # Broken by hand: Tk only wraps at a space or inside a single run that
         # overflows on its own, so a CJK sentence followed by a Latin word wraps
         # after the first word and leaves the rest of the line empty.
-        "desc": "把游戏用到的每个字体名指向一个 FontGroup：拉丁字母继续用游戏自己的字体，\n"
-                "中文交给随包安装的 Noto。这是给运行时注入中文（露娜等）打底的一步，\n"
-                "不翻译任何文本。",
+        "desc": "让游戏用到的每个字体名都能显示中文：拉丁字母继续用游戏自己的字体，\n"
+                "汉字交给随包的 Noto。Ren'Py 7.6 及以后用 FontGroup 分流；更老的引擎\n"
+                "没有这个 API，安装时会把汉字合并进游戏自己的字体文件。这是给运行时\n"
+                "注入中文（露娜等）打底的一步，不翻译任何文本。",
         "default_on": True,
         "state": {"installed": "shim", "ours": "ours", "current": "current"},
     },

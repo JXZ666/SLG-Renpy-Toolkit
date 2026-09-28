@@ -21,7 +21,10 @@ folder. Today there are two, and neither depends on the other:
   Windows system font APIs, which Ren'Py never uses. Ren'Py loads a `.ttf` straight out
   of the game directory and hands it to FreeType, so an English game's fonts contain no
   Hanzi and the injected Chinese cannot be drawn. This feature installs a CJK font plus a
-  `FontGroup` shim that keeps each original face for Latin and draws CJK with Noto Sans SC.
+  shim that keeps each original face for Latin and draws CJK with Noto Sans SC. On Ren'Py
+  7.6 and later that shim is a `FontGroup`; on older engines, which have no
+  `config.font_name_map`, the Hanzi is merged into the game's own font files at install
+  time and routed through `config.font_replacement_map` instead.
 - **Skip the opening logo** — points the game's `splashscreen` label at an empty
   implementation, so the game boots straight to the main menu.
 
@@ -135,11 +138,14 @@ python app_main.py "D:\Games\SomeGame" --dry-run  # 命令行预览
 
 选中游戏目录后（命令行则是任何动作开始前），工具会先检查发行版信息，并**分别判断每个功能需要的引擎 API**：
 
-- `fontfix` 需要 Ren'Py 提供 `FontGroup` 和 `config.font_name_map`。缺少任一必需 API 时，字体功能标为不支持并阻止安装。
+- `fontfix` 按引擎提供的 API 选路线，两条路只要有一条走得通就算支持：
+  - `config.font_name_map` + `FontGroup.add(font, start, end)` 都存在时，走运行时别名（Ren'Py 7.6 及以后）；
+  - 只有 `config.font_replacement_map` 时，走合并字体路线（Ren'Py 7.5 及更早）。这条路要把汉字合并进游戏自己的字体文件，需要 `fontTools`；没装时该功能标为不支持，理由里会给出 `python -m pip install fonttools`。
+  - 两条都没有时，字体功能标为不支持并阻止安装，理由里会同时点名两条路线。
 - `intro` 单独检查 `config.label_overrides`。字体功能不支持，不代表跳过开场也不支持；反过来也一样。
 - 每个功能都有独立的支持状态和理由。`.rpa` 中脚本不可读、架构或 Python 运行时等其他情况也会单独提示。
 
-Ren'Py **7.5.3 不支持本工具的 `fontfix`**：它没有 `config.font_name_map`，继续安装生成的字体垫片会让游戏启动时报错。Python 2.7 不是这个问题的唯一判断依据；必须看目标发行版实际提供的 API。`intro` 仍按 `config.label_overrides` 的能力单独判断。
+Ren'Py **7.5.3 走的是合并字体路线**：它没有 `config.font_name_map`，装 FontGroup 垫片会让游戏启动时报错，所以改用 `config.font_replacement_map`，把汉字合并进游戏自己的字体文件。合并后的文件保留游戏原有的全部拉丁字形，等宽问题只影响新增的汉字。Python 2.7 不是判断依据；必须看目标发行版实际提供的 API。
 
 兼容扫描不启动 Ren'Py，也不执行补丁。它只能确认扫描到的文件/API 线索，**不能替代引擎启动验证**，更不能保证菜单、存档或字体渲染在游戏中正常。`config.label_overrides` 存在只说明跳过开场补丁具备所需 API；游戏还需实际定义 `splashscreen` 才会有可见效果。
 
@@ -178,8 +184,10 @@ Ren'Py **7.5.3 不支持本工具的 `fontfix`**：它没有 `config.font_name_m
    - `keep-ascii` —— 同上，但只保留 ASCII 范围
    - `noto-only` —— 整个换成思源黑体
 4. **安装**：把思源黑体复制进游戏，并生成 `zz_localization.rpy`，把游戏里每个字体名
-   映射到一个 `FontGroup`——拉丁字符仍用游戏原本的字体（视觉风格不变），
-   汉字交给思源黑体。
+   都变成「拉丁字符仍用游戏原本的字体、汉字交给思源黑体」。Ren'Py 7.6 及以后用一个
+   `FontGroup` 分流；更老的引擎没有 `config.font_name_map`，就改用
+   `config.font_replacement_map`，并在安装时把汉字**合并进游戏自己的字体文件**，
+   因此每个用到的字体名都会在 `game/localization/` 下多出一份合并结果。
 
 ### 跳过开场 logo
 
@@ -212,12 +220,13 @@ Ren'Py **7.5.3 不支持本工具的 `fontfix`**：它没有 `config.font_name_m
 本工具只补中文字形，不负责符号表。
 
 另外说明一点：Ren'Py 自带引擎字体（`renpy/common/` 下的 Twemoji、OpenDyslexic 等）
-本工具不会去动。但**游戏目录里自带的**字体名会被统一映射到思源黑体 + 原字体的
-FontGroup。如果你发现游戏里的表情符号显示异常，欢迎开 issue。
+本工具不会去动。但**游戏目录里自带的**字体名会被统一映射到思源黑体 + 原字体的组合
+（7.6 及以后是 FontGroup，更老是合并字体）。如果你发现游戏里的表情符号显示异常，
+欢迎开 issue。
 
 **Q：支持哪些版本的 Ren'Py？**
 
-不能只按 Ren'Py 主版本或 Python 版本承诺支持。预检会对 `fontfix` 和 `intro` 分别检查必需 API，并在界面或命令行报告每个功能的支持状态与原因；缺少对应 API 的功能会被拦截。Ren'Py 7.5.3 缺少 `config.font_name_map`，因此 `fontfix` 明确不受支持；`intro` 则独立按 `config.label_overrides` 判断。预检不启动游戏，API 检查通过也不等于游戏已完成运行验证。
+不能只按 Ren'Py 主版本或 Python 版本承诺支持。预检会对 `fontfix` 和 `intro` 分别检查必需 API，并在界面或命令行报告每个功能的支持状态与原因；缺少对应 API 的功能会被拦截。`fontfix` 有两条路：Ren'Py 7.6 及以后用 `config.font_name_map` + `FontGroup`，7.5 及更早用 `config.font_replacement_map` + 合并字体（需要 `fontTools`）；两条都不具备才会被判定不支持。`intro` 独立按 `config.label_overrides` 判断。预检不启动游戏，API 检查通过也不等于游戏已完成运行验证。
 
 **Q：游戏打包在 `.rpa` 里，需要我先解包吗？**
 
@@ -282,7 +291,7 @@ pytest 命令覆盖发布身份、GUI 状态存取、RPA 安全解析与显式�
 
 下表保留了早期版本对 `<本地测试游戏目录>` 中 9 个游戏的文件层面记录。它们是在按功能增加 API 门禁之前完成的，旧版「可装 / 有风险」不能当作当前某项功能的支持承诺。当前是否允许安装，应以新版预检中 `fontfix` 与 `intro` 各自的 API 状态和理由为准。
 
-这些记录验证的是扫描、静态干跑、安装和撤销，不等同于引擎启动验证。此前这些样本都没有成功启动到主菜单；Game-J 曾实际尝试启动，但旧字体补丁因缺少 `config.font_name_map` 报错，故新版明确拦截它的 `fontfix`。新模拟流程会使用临时副本；本次只读取了该游戏的兼容信息和错误日志，没有启动或改动原目录。
+这些记录验证的是扫描、静态干跑、安装和撤销，不等同于引擎启动验证。此前这些样本都没有成功启动到主菜单；Game-J 曾实际尝试启动，旧字体补丁因缺少 `config.font_name_map` 报错，那次的报错正是「7.6 以前没有运行时别名」这条结论的来源，也是后来加合并字体路线的起因。新模拟流程会使用临时副本。
 
 | 游戏 | Ren'Py | Python | 脚本 | 旧版预检 | 已做的文件检查 | 启动状态 |
 |---|---|---|---|---|---|---|
@@ -295,7 +304,7 @@ pytest 命令覆盖发布身份、GUI 状态存取、RPA 安全解析与显式�
 | Game-G 2.0.0 | 8.2.0 | 3.9 | 9 rpa，**全打包** | 有风险 | 仅干跑 | 未验证 |
 | Game-H 0.9 | 8.5.0 | 3.12 | 1 rpa，**全打包** | 有风险 | 仅干跑 | 未验证 |
 | Game-I 0.6.6.0 | **7.4.11** | **2.7** | 11 rpa，**全打包** | 有风险 | 仅干跑 | 未验证 |
-| Game-J 1.01 | **7.5.3** | **2.7** | — | 旧版未拦截 fontfix | 字体补丁曾写入 | **启动失败：缺少 `config.font_name_map`；fontfix 当前应被拦截。intro 由 `config.label_overrides` 独立判定。** |
+| Game-J 1.01 | **7.5.3** | **2.7** | 2 rpa + 18 散 | 旧版未拦截 fontfix | 装 + 撤 + 重装 | 未验证 |
 
 六个「可装」的游戏都做了真装 + 撤销，撤销后与动手前的指纹**逐字节相同**，
 `game/` 目录下的文件名列表也一个不差。三个「有风险」的只跑了 `--dry-run`，
@@ -334,6 +343,15 @@ pytest 命令覆盖发布身份、GUI 状态存取、RPA 安全解析与显式�
   无 `super()`）。旧版只对它干跑，未留存按功能确认运行时 API 的记录；
   因此不能由 Ren'Py 7 主版本或 Python 2 语法兼容推断它的功能支持，必须用当前预检分别判断，
   且游戏启动状态仍是**未验证**。
+- **Game-J 1.01** — 唯一的 **Ren'Py 7.5.3**，也是合并字体路线的实测对象。
+  它 5 个自带字体里有 2 个要合并（`DejaVuSans` 系列，各自合并后约 11.6 MB）、
+  2 个整体换成 Noto，`game/zz_localization.rpy` 最终重定向 6 个字体名。
+  实测步骤：`--dry-run` → 真装 → 确认合并结果里拉丁与汉字**都在**
+  （逐个开 `cmap` 数过）→ `--revert` → 确认 `game/` 下不留任何 `.rpy`/`.rpyc`/
+  `localization/` 残渣 → 再装一次（走缓存，2.7 秒）。
+  合并会丢掉两个字体无法调和的部分：`GSUB`/`GPOS` 等排版表（代价是连字与字距），
+  以及只有一边有的提示表。汉字字形本身全部来自 `cmap`，不受影响。
+  **游戏启动与渲染仍未验证**，需要在游戏里实际看到汉字才能确认这一条。
 
 ### 验证是怎么做的
 
