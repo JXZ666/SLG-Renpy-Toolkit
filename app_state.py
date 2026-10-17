@@ -81,12 +81,19 @@ def _sanitize(raw):
         for entry in games[:200]:
             if not isinstance(entry, dict) or not entry.get("path"):
                 continue
-            try:
-                path = validate_game_path(entry["path"])
-            except (OSError, TypeError, ValueError):
-                # A moved/removed game stays out of the active list. It is not
-                # silently pointed at a different directory.
+            raw_path = entry.get("path")
+            if not isinstance(raw_path, (str, os.PathLike)):
                 continue
+            try:
+                path = validate_game_path(raw_path)
+                available = True
+            except (OSError, TypeError, ValueError):
+                # Keep the manual bookmark when a game is moved or its drive is
+                # offline.  Re-validating on every save used to delete it during
+                # an unrelated window resize.  The UI must show it as
+                # unavailable and must never scan beneath it until it returns.
+                path = os.path.abspath(os.fspath(raw_path))
+                available = False
             key = _normal_path(path)
             if key in seen:
                 continue
@@ -94,6 +101,7 @@ def _sanitize(raw):
             state["games"].append({
                 "path": path,
                 "name": _clean_name(entry.get("name"), os.path.basename(path)),
+                "available": available,
             })
 
     active = raw.get("active_game")
@@ -147,10 +155,12 @@ def add_game(state, path, name=None):
     for item in result["games"]:
         if _normal_path(item["path"]) == key:
             item["name"] = _clean_name(name, item["name"])
+            item["available"] = True
             result["active_game"] = item["path"]
             return result
     entry = {"path": game_path,
-             "name": _clean_name(name, os.path.basename(game_path))}
+             "name": _clean_name(name, os.path.basename(game_path)),
+             "available": True}
     result["games"].append(entry)
     result["active_game"] = game_path
     return result

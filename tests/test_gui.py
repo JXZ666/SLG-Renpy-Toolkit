@@ -291,7 +291,12 @@ def simulation_checks(app, root, check):
 def main():
     check("CustomTkinter production UI is importable", appgui.ctk is not None)
 
-    root = tk.Tk()
+    # pytest's shared Tk root avoids a Windows/Tk failure when a second
+    # interpreter is created after the first one was destroyed.  Standalone
+    # runs still own and destroy their root.
+    shared = getattr(tk, "_default_root", None)
+    owns_root = shared is None
+    root = tk.Tk() if owns_root else shared
     root.withdraw()
     try:
         state_file = os.path.join(tempfile.gettempdir(),
@@ -538,7 +543,26 @@ def main():
             app.close()
             check("window close destroys the Tk root", destroy_root.called)
     finally:
-        root.destroy()
+        try:
+            for timer in root.tk.call("after", "info"):
+                root.tk.call("after", "cancel", timer)
+        except tk.TclError:
+            pass
+        if owns_root:
+            root.destroy()
+        else:
+            # Leave the interpreter alive for the UI tests, but remove this
+            # suite's widgets and root bindings so they cannot call a dead App.
+            try:
+                for child in list(root.winfo_children()):
+                    child.destroy()
+                for sequence in ("<Configure>", "<Control-o>", "<F5>",
+                                 "<Control-l>", "<Control-Return>", "<Escape>"):
+                    root.unbind(sequence)
+                root.protocol("WM_DELETE_WINDOW", lambda: None)
+                root.withdraw()
+            except tk.TclError:
+                pass
         try:
             os.unlink(state_file)
         except (OSError, UnboundLocalError):

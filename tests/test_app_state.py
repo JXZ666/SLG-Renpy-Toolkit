@@ -19,7 +19,8 @@ def test_add_game_requires_a_game_directory_and_never_scans_it(tmp_path):
     game = make_game(tmp_path)
     state = app_state.add_game(app_state.default_state(), game)
 
-    assert state["games"] == [{"path": str(game.resolve()), "name": "Example"}]
+    assert state["games"] == [{"path": str(game.resolve()), "name": "Example",
+                               "available": True}]
     assert state["active_game"] == str(game.resolve())
     assert {child.name for child in game.iterdir()} == {"game", "renpy"}
     with pytest.raises(ValueError, match="Ren.*Py"):
@@ -72,5 +73,6 @@ def test_invalid_state_falls_back_and_removed_paths_do_not_remain_active(tmp_pat
     import shutil
     shutil.rmtree(game)
     loaded = app_state.load_state(filename)
-    assert loaded["games"] == []
-    assert loaded["active_game"] == ""
+    assert loaded["games"] == [{"path": str(game), "name": "Removed",
+                                "available": False}]
+    assert loaded["active_game"] == str(game)

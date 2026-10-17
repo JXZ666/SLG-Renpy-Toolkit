@@ -6,6 +6,16 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import win_platform  # noqa: E402
+
+# DPI awareness and the taskbar identity have to be in place before Tk creates
+# its root. win_platform already swallows platform failures; the extra guard
+# keeps a broken probe from taking the whole window down at import time.
+try:
+    win_platform.prepare_windows_process()
+except Exception:  # noqa: BLE001 - the GUI must still start
+    pass
+
 import appgui  # noqa: E402
 
 

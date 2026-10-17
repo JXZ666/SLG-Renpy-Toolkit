@@ -23,33 +23,42 @@ import compat
 import features
 import simulation
 import engine_adapters
+import ui_focus
+import ui_text
+import ui_tokens
 
 TITLE = branding.APP_NAME
 
-# Windows 11's semantic colours, dark on the left, light on the right. The
-# light variants are the darker, higher-contrast pair, because the same hue
-# that reads on #1c1c1c is invisible on #fafafa.
+# The glyphs are semantic status markers, not emoji.  They are deliberately
+# small and monochrome so the text colour carries the meaning in both themes.
 _GLYPH = {"ok": "\u221a", "warn": "!", "bad": "\u00d7", "info": "\u00b7"}
 
-# Used only if sv-ttk is missing or the style has not been applied yet.
-_COLORS = {
-    "light": {
-        "bg": "#f4f5fb", "sidebar": "#ffffff", "panel": "#ffffff",
-        "panel_alt": "#f8f8fd", "fg": "#202136", "dim": "#777a92",
-        "border": "#e3e4ef", "accent": "#7057e8", "accent_hover": "#6046d3",
-        "accent_soft": "#eeeaff", "ok": "#18794e", "warn": "#9a6400",
-        "bad": "#bf3b4b", "input": "#ffffff", "select": "#ded8ff",
-    },
-    "dark": {
-        "bg": "#11121a", "sidebar": "#161824", "panel": "#1a1c29",
-        "panel_alt": "#222437", "fg": "#f0eff8", "dim": "#a0a3b7",
-        "border": "#303349", "accent": "#9a85ff", "accent_hover": "#b2a3ff",
-        "accent_soft": "#302a4a", "ok": "#79d8a4", "warn": "#ffca69",
-        "bad": "#ff8797", "input": "#202232", "select": "#463b72",
-    },
-}
+
+def _aliases(theme):
+    """Compatibility names used by the older layout code.
+
+    ``accent`` used to mean both “accent fill” and “accent text”.  Those two
+    now have different jobs: a dark purple fill with white text, and a lighter
+    purple for text on a light surface.  The alias keeps old call sites working
+    while new code uses the explicit names.
+    """
+    pal = dict(ui_tokens.PALETTES[theme])
+    pal["accent"] = pal["accent_fill"]
+    pal["selbg"] = pal["select"]
+    pal["selfg"] = pal["fg"]
+    return pal
+
+
+_COLORS = {theme: _aliases(theme) for theme in ("light", "dark")}
 _PAIR = {name: (_COLORS["light"][name], _COLORS["dark"][name])
          for name in _COLORS["light"]}
+
+
+def _walk(widget):
+    """Yield a widget and every descendant, depth first."""
+    yield widget
+    for child in widget.winfo_children():
+        yield from _walk(child)
 
 
 class _Sink:
@@ -142,30 +151,49 @@ def _chip(entry, state):
 
 
 def _describe(s):
-    """One line naming what kind of game this folder holds."""
+    """One compact line naming what kind of game this folder holds."""
     engine = s.get("engine", {})
     if engine.get("id") and engine["id"] != "renpy":
-        name = {"rpgmaker_mv": "RPG Maker MV", "rpgmaker_mz": "RPG Maker MZ"}.get(engine["id"], "未知引擎")
-        return s["label"] + " · " + name + " " + (engine.get("version") or "版本未知")
-    r = s["renpy"]
-    py = s["python"]["major"]
-    src = s["sources"]
-    bits = [s["label"], "Ren'Py %s" % (r["version"] or "版本未知")]
+        name = {"rpgmaker_mv": "RPG Maker MV",
+                "rpgmaker_mz": "RPG Maker MZ"}.get(engine["id"], "未知引擎")
+        return "%s  ·  %s %s" % (name, engine.get("version") or "版本未知",
+                                 s.get("label") or "")
+    r = s.get("renpy") or {}
+    py = (s.get("python") or {}).get("major")
+    bits = ["Ren'Py %s" % (r.get("version") or "版本未知")]
     if r.get("name"):
-        bits.append(r["name"])
+        bits.append(str(r["name"]))
     bits.append("Python %s" % (py if py else "?"))
-    bits.append("双架构" if s["arch"] == "both" else (s["arch"] or "架构未知"))
-    scripts = src.get("loose_rpy", 0) + src.get("loose_rpyc", 0)
-    if src.get("rpa"):
-        bits.append("%d 个归档 / %d 个可读脚本" % (len(src["rpa"]), scripts))
-    else:
-        bits.append("%d 个可读脚本" % scripts)
-    bits.append("开场 logo %s" % ("找到了" if s["splash"].get("found") else "没找到"))
-    return " \u00b7 ".join(bits)
+    bits.append("双架构" if s.get("arch") == "both" else (s.get("arch") or "架构未知"))
+    return "  ·  ".join(b for b in bits if b)
 
 
 def _reasons(s):
-    return "\n".join("\u2014\u2014 " + x for x in (s.get("reasons") or []))
+    reasons = ui_text.localize_reasons((s or {}).get("reasons") or [])
+    return "\n".join("\u2022 " + x for x in reasons)
+
+
+def _describe_details(s):
+    """Labeled rows for the diagnostics page, instead of one long dot string."""
+    engine = s.get("engine") or {}
+    r = s.get("renpy") or {}
+    py = (s.get("python") or {}).get("major")
+    src = s.get("sources") or {}
+    scripts = (src.get("loose_rpy") or 0) + (src.get("loose_rpyc") or 0)
+    name = {"rpgmaker_mv": "RPG Maker MV",
+            "rpgmaker_mz": "RPG Maker MZ"}.get(engine.get("id"), "Ren'Py")
+    lines = [
+        "游戏：" + str(s.get("label") or "未知"),
+        "引擎：" + name + " " + str(engine.get("version") or r.get("version") or "版本未知"),
+        "运行时：Python %s" % (py if py else "未识别"),
+        "架构：" + ("双架构" if s.get("arch") == "both" else str(s.get("arch") or "未识别")),
+        "脚本：%d 个可读脚本" % scripts,
+    ]
+    if src.get("rpa"):
+        lines.append("归档：%d 个" % len(src["rpa"]))
+    if s.get("splash"):
+        lines.append("开场 logo：" + ("找到了" if s["splash"].get("found") else "没找到"))
+    return lines
 
 
 class _FeatureRow:
@@ -182,6 +210,8 @@ class _FeatureRow:
         self.reason_var = reason_var
         self.reason_label = reason_label
         self.supported = True
+        self.support_level = "unknown"
+        self.reason_items = []
 
 
 class _OperationMixin:
@@ -294,6 +324,7 @@ class _OperationMixin:
                    in self.sim_stage_state.values()):
             self._set_sim_stage("install", "failed", message)
         self._set_sim_result("bad", "\u6a21\u62df\u5931\u8d25\uff1a" + str(message))
+        self.sim_confirm_frame.pack_forget()
         self._show_log()
         self._set_buttons()
         if self.close_after_prepare:
@@ -350,7 +381,7 @@ class _OperationMixin:
                             "\u8bf7\u5728\u6e38\u620f\u4e2d\u786e\u8ba4\u662f\u5426\u8fdb\u5165\u4e3b\u83dc\u5355")
         self._set_sim_result(
             "warn", "\u7b49\u5f85\u786e\u8ba4\uff1a\u6e38\u620f\u8fdb\u7a0b\u5df2\u542f\u52a8\uff0c\u4f46\u8fd9\u4e0d\u7b49\u4e8e\u8fd0\u884c\u6210\u529f\u3002")
-        self.sim_confirm_frame.pack(anchor="w", pady=(9, 0))
+        self._pack_sim_confirm()
         self._set_buttons()
         if self.close_after_cleanup:
             self._cleanup_simulation(stop=True, close_after=True)
@@ -465,6 +496,7 @@ class _OperationMixin:
             return
         self._set_sim_stage("gameplay", "success", "用户确认已测试的剧情场景正常")
         self._set_sim_result("ok", "主菜单与本次测试的剧情场景已确认；关闭游戏后清理副本。")
+        self.sim_gameplay_confirmed = True
         self.btn_sim_gameplay.configure(state="disabled")
 
     def _simulation_confirm_failed(self, message):
@@ -474,7 +506,7 @@ class _OperationMixin:
         self._show_log()
         self._set_buttons()
         if self.sim_session is not None and not self.sim_confirmed:
-            self.sim_confirm_frame.pack(anchor="w", pady=(9, 0))
+            self._pack_sim_confirm()
         if self.close_after_cleanup:
             self._cleanup_simulation(stop=True, close_after=True)
 
@@ -525,22 +557,26 @@ class _OperationMixin:
         self.busy = False
         if errors:
             self._set_sim_stage("copy", "failed", "; ".join(errors))
-            self._set_sim_result(
-                "bad", self.sim_result_message + "  \u9694\u79bb\u526f\u672c\u6e05\u7406\u9047\u5230\u9519\u8bef\uff1a" + "; ".join(errors))
             self.close_after_cleanup = False
             self._set_sim_result(
-                "bad", self.sim_result_message + "  \u53ef\u518d\u6b21\u9000\u51fa\u4ee5\u91cd\u8bd5\u505c\u6b62\u548c\u6e05\u7406\u3002")
+                "bad", "隔离副本清理遇到错误：" + "; ".join(errors) +
+                "。可以点击“重试清理”，或关闭窗口后再试。")
+            self._pack_sim_confirm(cleanup=True)
             self._set_buttons()
             return
         self.sim_session = None
         self.sim_preparing = False
         self.sim_launched = False
         self.sim_confirmed = False
+        self.sim_gameplay_confirmed = False
+        self.sim_process_exited = False
+        self.sim_confirm_frame.pack_forget()
+        self.btn_sim_gameplay.configure(state="disabled")
         self._set_sim_stage("copy", "success",
-                            "\u9694\u79bb\u526f\u672c\u5df2\u6e05\u7406")
+                            "隔离副本已清理")
         if self.sim_result_level == "ok":
             self._set_sim_result(
-                "ok", self.sim_result_message + "  \u9694\u79bb\u526f\u672c\u5df2\u6e05\u7406\u3002")
+                "ok", self.sim_result_message + "  隔离副本已清理。")
         self._set_buttons()
         if self.close_after_cleanup:
             self._destroy_root()
@@ -577,25 +613,42 @@ class _OperationMixin:
     def _update_action_hint(self):
         selected = [features.title_of(fid) for fid in self._ticked()]
         if selected:
-            text = "\u6267\u884c\u8303\u56f4\uff1a" + "\u3001".join(selected)
+            text = "已选 %d 项：%s" % (len(selected), "、".join(selected))
         elif not self.game_dir:
-            text = "\u5148\u9009\u62e9\u6e38\u620f\u76ee\u5f55\uff0c\u518d\u52fe\u9009\u8981\u5904\u7406\u7684\u529f\u80fd\u3002"
+            text = "先选择游戏目录，再勾选要处理的功能。"
         elif engine_adapters.detect(self.game_dir)["id"] in ("unknown", "ambiguous"):
-            text = "\u6240\u9009\u76ee\u5f55\u6ca1\u6709 game/\uff0c\u8bf7\u9009\u6709\u6548\u7684\u6e38\u620f\u6839\u76ee\u5f55\u3002"
+            text = "该目录没有可识别的游戏引擎，请选择包含 game/ 的游戏根目录。"
         elif not any(row.supported for row in self.rows.values()):
-            text = "\u5f53\u524d\u6e38\u620f\u6ca1\u6709\u53ef\u7528\u529f\u80fd\uff0c\u8bf7\u67e5\u770b\u529f\u80fd\u5361\u7247\u4e2d\u7684\u517c\u5bb9\u539f\u56e0\u3002"
+            text = "当前游戏没有可用功能，请查看功能行中的兼容原因。"
         else:
-            text = "\u8bf7\u52fe\u9009\u81f3\u5c11\u4e00\u4e2a\u53ef\u7528\u529f\u80fd\uff1b\u9884\u89c8\u548c\u5904\u7406\u5c06\u4f7f\u7528\u5f53\u524d\u52fe\u9009\u9879\u3002"
+            text = "勾选至少一个可用功能；模拟和安装都会使用当前勾选项。"
         self.var_action_hint.set(text)
 
     def _selection_changed(self):
         self._set_buttons()
 
     def _log(self, text):
+        if not text:
+            return
         self.log.configure(state="normal")
         self.log.insert("end", text)
         self.log.see("end")
         self.log.configure(state="disabled")
+        if hasattr(self, "log_empty"):
+            self.log_empty.place_forget()
+        self._update_log_actions()
+
+    def _log_text(self):
+        return self.log.get("1.0", "end-1c")
+
+    def _update_log_actions(self):
+        if not hasattr(self, "btn_clear_log"):
+            return
+        has_text = bool(self._log_text().strip())
+        for button in (self.btn_clear_log, self.btn_copy_log, self.btn_export_log):
+            button.configure(state="normal" if has_text else "disabled")
+        if not has_text and hasattr(self, "log_empty"):
+            self.log_empty.place(relx=0.5, rely=0.45, anchor="center")
 
     def _ticked(self):
         """Read enabled feature ids on the main thread, in catalogue order."""
@@ -604,32 +657,60 @@ class _OperationMixin:
 
 
     def _apply_feature_support(self, survey):
-        # Older survey data has no support matrix; keep its previous behavior.
+        # Older survey data has no support matrix; keep its previous permissive
+        # behavior.  A present-but-incomplete matrix is different: an unknown
+        # value must not be treated as "supported", because that is how an
+        # experimental adapter ends up looking finished.
         support_map = survey.get("feature_support") if isinstance(survey, dict) else None
+        matrix_present = isinstance(support_map, dict) and bool(support_map)
         support_map = support_map if isinstance(support_map, dict) else {}
         for fid, row in self.rows.items():
             spec = support_map.get(fid)
             spec = spec if isinstance(spec, dict) else {}
-            row.supported = spec.get("supported") is not False
-            reasons = spec.get("reasons") or []
-            if isinstance(reasons, str):
-                reasons = [reasons]
-            detail = "\uff1b".join(str(reason) for reason in reasons if reason)
-            if row.supported:
+            raw_reasons = spec.get("reasons") or []
+            if isinstance(raw_reasons, str):
+                raw_reasons = [raw_reasons]
+            reasons = ui_text.localize_reasons(raw_reasons, fid)
+            row.reason_items = [
+                {"code": ui_text.reason_code(reason), "text": text}
+                for reason, text in zip(raw_reasons, reasons)
+            ] if reasons else []
+            if not matrix_present:
+                row.supported = True
+                row.support_level = "unknown"
+                row.reason_var.set("")
+                row.reason_label.pack_forget()
+                continue
+            level, label, detail = ui_text.support_copy(spec, fid)
+            row.support_level = level
+            row.supported = level in ("supported", "experimental")
+            if level == "unsupported":
+                self.var_on[fid].set(False)
+                row.reason_var.set(detail or "当前游戏不支持此功能。")
+                row.reason_label.configure(text_color=_PAIR["bad"])
+                row.reason_label.pack(fill="x", padx=14, pady=(6, 11))
+            elif level == "experimental":
+                row.reason_var.set(detail or "实验性功能，尚未在真实引擎完整验证。")
+                row.reason_label.configure(text_color=_PAIR["warn"])
+                row.reason_label.pack(fill="x", padx=14, pady=(6, 11))
+            elif level == "unknown":
+                self.var_on[fid].set(False)
+                row.reason_var.set("尚未确认此功能是否可用；为避免误操作，已暂不勾选。")
+                row.reason_label.configure(text_color=_PAIR["bad"])
+                row.reason_label.pack(fill="x", padx=14, pady=(6, 11))
+            else:
+                row.reason_var.set(detail)
                 row.reason_label.configure(text_color=_PAIR["dim"])
-                row.reason_var.set("适配范围：" + detail if detail else "")
                 if detail:
-                    row.reason_label.pack(fill="x", padx=12, pady=(7, 12))
+                    row.reason_label.pack(fill="x", padx=14, pady=(6, 11))
                 else:
                     row.reason_label.pack_forget()
-            else:
-                row.reason_label.configure(text_color=_PAIR["bad"])
-                self.var_on[fid].set(False)
-                reason = "\u5f53\u524d\u6e38\u620f\u4e0d\u652f\u6301\u6b64\u529f\u80fd"
-                if detail:
-                    reason += "\uff1a" + detail
-                row.reason_var.set(reason)
-                row.reason_label.pack(fill="x", padx=12, pady=(7, 12))
+            if any(item["code"] == "unknown" for item in row.reason_items):
+                # Keep technical evidence available without putting the raw
+                # English sentence in the normal interface.
+                raw = "；".join(str(x) for x in raw_reasons)
+                if raw and hasattr(self, "log"):
+                    self._log("\n[兼容性原文 %s] %s\n" % (fid, raw))
         self._apply_wrap()
         if self.action_buttons:
             self._set_buttons()
@@ -652,16 +733,59 @@ class _OperationMixin:
                           skip_intro=("intro" in ids), **kw)
 
     def install(self):
-        if not self._ticked():
-            messagebox.showinfo(TITLE, "一个功能都没有勾选，没什么要装的。")
+        selected = self._ticked()
+        if not selected:
+            messagebox.showinfo(TITLE, "请先勾选至少一个可用功能。")
+            return
+        if not self._confirm_install(selected):
             return
         if not self._confirm_overwrite():
             return
-        self._spawn(self._args(force=True), "开始处理", notify=True)
+        self._spawn(self._args(force=True), "安装到游戏", notify=True)
+
+    def _installed_titles(self):
+        state = self._installed
+        if state is None and self.game_dir:
+            try:
+                state = engine_adapters.installed_state(self.game_dir)
+            except Exception:  # noqa: BLE001 - a diagnostic is not worth a crash
+                state = {}
+        state = state or {}
+        titles = []
+        for entry in features.CATALOG:
+            keys = entry.get("state") or {}
+            if any(state.get(key) for key in keys.values()):
+                titles.append(entry["title"])
+        return titles
+
+    def _confirm_install(self, selected):
+        names = "、".join(features.title_of(fid) for fid in selected)
+        body = (
+            "即将把以下功能写入游戏目录：\n\n  %s\n\n"
+            "路径：%s\n\n"
+            "工具会先备份要改动的文件，之后可以用“撤销还原”恢复。"
+            "不确定游戏是否兼容时，请先取消并运行模拟。\n\n继续吗？"
+            % (names, self.game_dir or "（未选择）")
+        )
+        return messagebox.askyesno(TITLE, body)
 
     def revert(self):
         # No feature selection here: undo is undo, everything this tool wrote
         # goes, whether or not it is ticked now.
+        if not self.game_dir:
+            messagebox.showinfo(TITLE, "请先选择一个游戏目录。")
+            return
+        installed = self._installed_titles()
+        if not installed:
+            messagebox.showinfo(TITLE, "没有检测到本工具写入的补丁，无需撤销。")
+            return
+        body = (
+            "将撤销本工具写入的以下补丁：\n\n  %s\n\n"
+            "游戏存档和自然取得的进度不会被回滚；只恢复本工具改过的文件。\n\n"
+            "继续吗？" % "、".join(installed)
+        )
+        if not messagebox.askyesno(TITLE, body):
+            return
         self._spawn(_namespace(self.game_dir, revert=True), "撤销还原", notify=True)
 
     def _confirm_overwrite(self):
@@ -694,6 +818,7 @@ class _OperationMixin:
         self._show_log()
         self.busy = True
         self.notify = notify
+        self.last_action = "revert" if getattr(argv, "revert", False) else "install"
         self.last_selected = list(getattr(argv, "features", None) or [])
         self._set_buttons()
         threading.Thread(target=self._work, args=(argv,), daemon=True).start()
@@ -726,26 +851,34 @@ class _OperationMixin:
             return
         if code == 0:
             names = "、".join(features.title_of(fid) for fid in self.last_selected)
-            if self.last_outcome == "no_changes":
+            if self.last_action == "revert":
                 messagebox.showinfo(
-                    TITLE, "完成：%s。\n\n选中的字体已全部覆盖中文，本次没有需要改动的文件。"
-                           % (names or "没有改动"))
+                    TITLE, "已撤销本工具写入的补丁。\n\n"
+                           "游戏存档和自然取得的进度没有被回滚；"
+                           "如果文件被外部修改过，工具会保留可恢复的备份。")
+            elif self.last_outcome == "no_changes":
+                messagebox.showinfo(
+                    TITLE, "没有需要改动的文件。\n\n"
+                           "选中的字体已覆盖中文，本次没有写入游戏目录。")
             else:
                 messagebox.showinfo(
-                    TITLE, "完成：%s。\n\n现在开一次游戏看看效果。"
-                           % (names or "没有改动"))
+                    TITLE, "已安装：%s。\n\n"
+                           "建议先开一次游戏检查主菜单和一段剧情；"
+                           "如果异常，可点击“撤销还原”。" % (names or "所选功能"))
         else:
             self._show_log()
-            messagebox.showerror(TITLE, "出错了，看下面的日志。")
+            messagebox.showerror(
+                TITLE, "处理失败，游戏目录没有完成本次操作。\n\n"
+                       "详细信息已写入运行日志；如提示部分文件已改，请先撤销还原再重试。")
 
 
 class App(_OperationMixin):
     """CustomTkinter production shell around the existing operation state machine."""
 
     PAGES = {
-        "process": ("处理", "选择游戏，先模拟运行，再应用补丁。"),
-        "library": ("游戏库", "只保存手动添加的游戏位置，不扫描整个磁盘。"),
-        "toolbox": ("游戏信息", "查看当前游戏的兼容性和补丁状态。"),
+        "process": ("处理", "选择游戏，先模拟运行，再决定是否写入原目录。"),
+        "library": ("游戏库", "只保存手动添加的位置，不扫描整个磁盘。"),
+        "toolbox": ("游戏信息", "兼容性、引擎版本与已安装补丁的只读诊断。"),
         "log": ("运行日志", "查看、复制或导出最近的处理输出。"),
         "settings": ("设置", "调整外观；窗口大小会自动记住。"),
     }
@@ -766,6 +899,7 @@ class App(_OperationMixin):
         self.notify = True
         self.last_selected = []
         self.last_outcome = None
+        self.last_action = None
         self.rows = {}
         self.var_on = {}
         self.action_buttons = {}
@@ -774,6 +908,7 @@ class App(_OperationMixin):
         self.sim_preparing = False
         self.sim_launched = False
         self.sim_confirmed = False
+        self.sim_gameplay_confirmed = False
         self.sim_process_exited = False
         self.sim_cleanup_running = False
         self.close_after_prepare = False
@@ -789,6 +924,7 @@ class App(_OperationMixin):
         self._theme = _system_theme()
         self._survey = None
         self._installed = None
+        self._font_cache = {}
         self._build()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.bind("<Configure>", self._schedule_geometry_save, add="+")
@@ -799,14 +935,29 @@ class App(_OperationMixin):
         if active and os.path.isdir(active):
             self.set_game_dir(active, remember=False)
 
-    def _font(self, size=11, weight="normal"):
-        return ctk.CTkFont(family="Microsoft YaHei UI", size=size, weight=weight)
+    def _font(self, size=None, weight="normal"):
+        """Return one cached CTkFont per role/size.
 
-    def _card(self, parent, padding=16):
-        card = ctk.CTkFrame(parent, corner_radius=14, fg_color=_PAIR["panel"],
-                            border_width=1, border_color=_PAIR["border"])
+        CTkFont objects belong to a Tk root.  Recreating them for every label
+        was both wasteful and a source of inconsistent sizes when a caller
+        passed a literal.  ``size=None`` means body copy.
+        """
+        if size is None:
+            size = ui_tokens.FONT_ROLES["body"]
+        key = (int(size), str(weight))
+        cached = self._font_cache.get(key)
+        if cached is None:
+            cached = ctk.CTkFont(family="Microsoft YaHei UI", size=int(size),
+                                 weight=str(weight))
+            self._font_cache[key] = cached
+        return cached
+
+    def _card(self, parent, padding=ui_tokens.SPACING[3]):
+        card = ctk.CTkFrame(parent, corner_radius=ui_tokens.RADIUS["card"],
+                            fg_color=_PAIR["panel"], border_width=1,
+                            border_color=_PAIR["border"])
         card.pack_propagate(True)
-        card.pack(fill="x", pady=(0, 12))
+        card.pack(fill="x", pady=(0, ui_tokens.SPACING[2]))
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.pack_propagate(True)
         inner.pack(fill="both", expand=True, padx=padding, pady=padding)
@@ -828,73 +979,98 @@ class App(_OperationMixin):
         self.shell.pack(fill="both", expand=True)
         self.shell.grid_columnconfigure(1, weight=1)
         self.shell.grid_rowconfigure(0, weight=1)
-        self.sidebar = ctk.CTkFrame(self.shell, width=216, corner_radius=0,
+        self.sidebar = ctk.CTkFrame(self.shell, width=224, corner_radius=0,
                                     fg_color=_PAIR["sidebar"])
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_propagate(False)
         ctk.CTkFrame(self.sidebar, width=4, corner_radius=0,
-                     fg_color=_PAIR["accent"]).place(x=0, y=0, relheight=1)
+                     fg_color=_PAIR["accent_fill"]).place(x=0, y=0, relheight=1)
+        ctk.CTkFrame(self.sidebar, width=1, corner_radius=0,
+                     fg_color=_PAIR["border"]).place(relx=1.0, y=0, relheight=1,
+                                                     anchor="ne")
 
         logo = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        logo.pack(fill="x", padx=(20, 12), pady=(24, 24))
-        ctk.CTkLabel(logo, text="RPY", width=42, height=42, corner_radius=12,
-                     fg_color=_PAIR["accent_soft"], text_color=_PAIR["accent"],
-                     font=self._font(14, "bold")).pack(side="left")
+        logo.pack(fill="x", padx=(20, 12), pady=(24, 20))
+        ctk.CTkLabel(logo, text="RPY", width=44, height=44,
+                     corner_radius=ui_tokens.RADIUS["card"],
+                     fg_color=_PAIR["accent_soft"], text_color=_PAIR["accent_text"],
+                     font=self._font(15, "bold")).pack(side="left")
         brand = ctk.CTkFrame(logo, fg_color="transparent")
-        brand.pack(side="left", padx=(10, 0))
+        brand.pack(side="left", padx=(11, 0))
         ctk.CTkLabel(brand, text="Ren'Py Toolkit", anchor="w",
-                     text_color=_PAIR["fg"], font=self._font(12, "bold")).pack(anchor="w")
+                     text_color=_PAIR["fg"],
+                     font=self._font(13, "bold")).pack(anchor="w")
         ctk.CTkLabel(brand, text="简体中文补丁工具", anchor="w",
-                     text_color=_PAIR["dim"], font=self._font(9)).pack(anchor="w", pady=(3, 0))
+                     text_color=_PAIR["dim"],
+                     font=self._font(ui_tokens.FONT_ROLES["meta"])).pack(
+                         anchor="w", pady=(3, 0))
 
         self.nav_buttons = {}
         nav = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         nav.pack(fill="x", padx=12)
         for page_id, title in self.NAV:
             button = ctk.CTkButton(
-                nav, text=title, anchor="w", height=40, corner_radius=10,
+                nav, text=title, anchor="w", height=42,
+                corner_radius=ui_tokens.RADIUS["button"],
                 fg_color="transparent", hover_color=_PAIR["panel_alt"],
-                text_color=_PAIR["dim"], font=self._font(11),
+                text_color=_PAIR["dim"],
+                font=self._font(ui_tokens.FONT_ROLES["secondary"]),
                 command=lambda target=page_id: self._show_page(target))
             button.pack(fill="x", pady=3)
             self.nav_buttons[page_id] = button
         bottom = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         bottom.pack(side="bottom", fill="x", padx=14, pady=15)
         self.btn_theme = ctk.CTkButton(
-            bottom, text="外观：跟随系统", height=34, corner_radius=9,
+            bottom, text="外观：跟随系统", height=36,
+            corner_radius=ui_tokens.RADIUS["button"],
             fg_color=_PAIR["panel_alt"], hover_color=_PAIR["accent_soft"],
-            text_color=_PAIR["fg"], font=self._font(10), command=self._toggle_theme)
+            text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"]),
+            command=self._toggle_theme)
         self.btn_theme.pack(fill="x")
-        self.version_label = ctk.CTkLabel(bottom, text="v" + branding.APP_VERSION,
-                                          anchor="w", text_color=_PAIR["dim"],
-                                          font=self._font(9))
+        self.version_label = ctk.CTkLabel(
+            bottom, text="v" + branding.APP_VERSION, anchor="w",
+            text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"]))
         self.version_label.pack(anchor="w", pady=(9, 0))
+        self.channel_label = ctk.CTkLabel(
+            bottom, text="界面测试版", anchor="w", text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"]))
+        self.channel_label.pack(anchor="w", pady=(2, 0))
 
         self.content = ctk.CTkFrame(self.shell, fg_color=_PAIR["bg"], corner_radius=0)
-        self.content.grid(row=0, column=1, sticky="nsew", padx=(0, 18), pady=(0, 12))
+        self.content.grid(row=0, column=1, sticky="nsew", padx=(0, 24),
+                          pady=(0, 16))
         self.content.grid_columnconfigure(0, weight=1)
         self.content.grid_rowconfigure(2, weight=1)
-        header = ctk.CTkFrame(self.content, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=22, pady=(20, 11))
-        header.grid_columnconfigure(0, weight=1)
-        self.page_title = ctk.CTkLabel(header, text="", anchor="w",
-                                       text_color=_PAIR["fg"], font=self._font(21, "bold"))
+        self.header = ctk.CTkFrame(self.content, fg_color="transparent")
+        self.header.grid(row=0, column=0, sticky="ew", padx=24, pady=(20, 12))
+        self.header.grid_columnconfigure(0, weight=1)
+        self.page_title = ctk.CTkLabel(
+            self.header, text="", anchor="w", text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["page"], "bold"))
         self.page_title.grid(row=0, column=0, sticky="w")
-        self.page_subtitle = ctk.CTkLabel(header, text="", anchor="w",
-                                          text_color=_PAIR["dim"], font=self._font(10))
-        self.page_subtitle.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self.page_subtitle = ctk.CTkLabel(
+            self.header, text="", anchor="w", text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["body"]))
+        self.page_subtitle.grid(row=1, column=0, sticky="w", pady=(5, 0))
         self.var_global_status = tk.StringVar(value="就绪")
-        ctk.CTkLabel(header, textvariable=self.var_global_status,
-                     text_color=_PAIR["dim"], font=self._font(9)).grid(
-                         row=0, column=1, rowspan=2, sticky="e", padx=(12, 0))
-        self.bar = ctk.CTkProgressBar(self.content, height=3, corner_radius=0,
-                                      progress_color=_PAIR["accent"],
-                                      fg_color=_PAIR["border"])
+        self.status_chip = ctk.CTkLabel(
+            self.header, textvariable=self.var_global_status, height=28,
+            corner_radius=14, fg_color=_PAIR["panel_alt"],
+            text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"]), padx=10)
+        self.status_chip.grid(row=0, column=1, rowspan=2, sticky="e",
+                              padx=(12, 0))
+        self.bar = ctk.CTkProgressBar(
+            self.content, height=3, corner_radius=0,
+            progress_color=_PAIR["accent_fill"], fg_color=_PAIR["border"])
         self.bar.set(0)
-        self.bar.grid(row=1, column=0, sticky="new", padx=22)
+        self.bar.grid(row=1, column=0, sticky="new", padx=24)
         self.bar.grid_remove()
         self.page_host = ctk.CTkFrame(self.content, fg_color="transparent")
-        self.page_host.grid(row=2, column=0, sticky="nsew", padx=22, pady=(13, 4))
+        self.page_host.grid(row=2, column=0, sticky="nsew", padx=24,
+                            pady=(12, 4))
         self.page_host.grid_columnconfigure(0, weight=1)
         self.page_host.grid_rowconfigure(0, weight=1)
         self.pages = {}
@@ -909,172 +1085,270 @@ class App(_OperationMixin):
         self._build_log(self.pages["log"])
         self._build_settings(self.pages["settings"])
         self._show_page("process")
+        self._install_focus()
+        self._bind_shortcuts()
+        self.root.after_idle(self._apply_wrap)
 
     def _build_process(self, parent):
-        page = ctk.CTkScrollableFrame(parent, fg_color="transparent")
-        page.pack(fill="both", expand=True)
-        card, inner = self._card(page)
-        ctk.CTkLabel(inner, text="选择游戏", anchor="w", text_color=_PAIR["fg"],
-                     font=self._font(13, "bold")).pack(anchor="w")
-        ctk.CTkLabel(inner, text="请选择 Ren'Py 或 RPG Maker MV/MZ 的游戏根目录；工具会检查引擎和各项功能的适配范围。",
-                     anchor="w", text_color=_PAIR["dim"], font=self._font(10)).pack(
-                         anchor="w", pady=(4, 9))
+        outer = ctk.CTkFrame(parent, fg_color="transparent")
+        outer.pack(fill="both", expand=True)
+        outer.grid_columnconfigure(0, weight=1)
+        outer.grid_rowconfigure(0, weight=1)
+
+        page = ctk.CTkScrollableFrame(outer, fg_color="transparent")
+        page.grid(row=0, column=0, sticky="nsew")
+        self.process_scroll = page
+
+        _, inner = self._card(page, padding=ui_tokens.SPACING[3])
+        head = ctk.CTkFrame(inner, fg_color="transparent")
+        head.pack(fill="x")
+        ctk.CTkLabel(
+            head, text="游戏目录", anchor="w", text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["section"], "bold")).pack(
+                side="left")
+        ctk.CTkLabel(
+            head, text="Ren'Py 6-8 / RPG Maker MV-MZ", anchor="e",
+            text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"])).pack(side="right")
+        ctk.CTkLabel(
+            inner, text="选择包含 game/ 与引擎文件的游戏根目录。扫描只读取结构，不改动游戏。",
+            anchor="w", justify="left", wraplength=1, text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"])).pack(
+                anchor="w", pady=(5, 12))
         row = ctk.CTkFrame(inner, fg_color="transparent")
         row.pack(fill="x")
         self.var_dir = tk.StringVar(value="")
-        self.entry_dir = ctk.CTkEntry(row, textvariable=self.var_dir, state="readonly",
-                                      height=36, fg_color=_PAIR["input"],
-                                      border_color=_PAIR["border"], text_color=_PAIR["fg"],
-                                      font=self._font(10))
+        self.entry_dir = ctk.CTkEntry(
+            row, textvariable=self.var_dir, state="readonly", height=40,
+            corner_radius=ui_tokens.RADIUS["control"],
+            fg_color=_PAIR["input"], border_width=1,
+            border_color=_PAIR["border_strong"], text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"]))
         self.entry_dir.pack(side="left", fill="x", expand=True)
-        self.btn_pick = ctk.CTkButton(row, text="浏览…", width=88, height=36,
-                                      corner_radius=9, fg_color=_PAIR["accent"],
-                                      hover_color=_PAIR["accent_hover"],
-                                      font=self._font(10), command=self.pick)
+        self.btn_pick = ctk.CTkButton(
+            row, text="浏览…", width=92, height=40,
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color=_PAIR["accent_fill"], hover_color=_PAIR["accent_hover"],
+            text_color=_PAIR["on_accent"], border_width=2,
+            border_color=_PAIR["accent_fill"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"], "bold"),
+            command=self.pick)
         self.btn_pick.pack(side="left", padx=(8, 0))
-        self.var_compat = tk.StringVar(value="未选择游戏")
-        self.lbl_compat = ctk.CTkLabel(inner, textvariable=self.var_compat,
-                                       anchor="w", justify="left", wraplength=760,
-                                       text_color=_PAIR["dim"], font=self._font(10))
-        self.lbl_compat.pack(anchor="w", pady=(9, 0))
+
+        self.var_compat = tk.StringVar(value="")
+        self.lbl_compat = ctk.CTkLabel(
+            inner, textvariable=self.var_compat, anchor="w", justify="left",
+            wraplength=1, text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"]))
         self.var_reasons = tk.StringVar(value="")
-        self.lbl_reasons = ctk.CTkLabel(inner, textvariable=self.var_reasons,
-                                        anchor="w", justify="left", wraplength=760,
-                                        text_color=_PAIR["dim"], font=self._font(9))
-        self.lbl_reasons.pack(anchor="w", pady=(4, 0))
+        self.lbl_reasons = ctk.CTkLabel(
+            inner, textvariable=self.var_reasons, anchor="w", justify="left",
+            wraplength=1, text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"]))
         self.var_state = tk.StringVar(value="先选择一个游戏目录。")
-        self.lbl_state = ctk.CTkLabel(inner, textvariable=self.var_state, anchor="w",
-                                      justify="left", wraplength=760,
-                                      text_color=_PAIR["dim"], font=self._font(10, "bold"))
-        self.lbl_state.pack(anchor="w", pady=(8, 0))
-        self.var_compat.set("")
-        self.lbl_compat.pack_forget()
-        self.lbl_reasons.pack_forget()
+        self.lbl_state = ctk.CTkLabel(
+            inner, textvariable=self.var_state, anchor="w", justify="left",
+            wraplength=1, text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"], "bold"))
+        self.lbl_state.pack(anchor="w", pady=(10, 0))
 
         heading = ctk.CTkFrame(page, fg_color="transparent")
-        heading.pack(fill="x", pady=(2, 7))
-        ctk.CTkLabel(heading, text="可用功能", anchor="w", text_color=_PAIR["fg"],
-                     font=self._font(13, "bold")).pack(side="left")
-        ctk.CTkLabel(heading, text="来自当前功能目录", anchor="e",
-                     text_color=_PAIR["dim"], font=self._font(9)).pack(side="right")
+        heading.pack(fill="x", pady=(4, 7))
+        ctk.CTkLabel(
+            heading, text="功能", anchor="w", text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["section"], "bold")).pack(
+                side="left")
+        ctk.CTkLabel(
+            heading, text="默认只勾选字体预飞；其余功能先在副本验证", anchor="e",
+            text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"])).pack(side="right")
         grid = ctk.CTkFrame(page, fg_color="transparent")
         grid.pack(fill="x")
-        grid.grid_columnconfigure((0, 1), weight=1)
+        grid.grid_columnconfigure(0, weight=1)
         self.rows = {}
         self.var_on = {}
         for i, entry in enumerate(features.CATALOG):
-            feature_card = ctk.CTkFrame(grid, corner_radius=13, fg_color=_PAIR["panel"],
-                                        border_width=1, border_color=_PAIR["border"])
-            desc = entry.get("desc", "")
-            desc_lines = sum(max(1, (len(line) + 46) // 47)
-                             for line in desc.splitlines()) or 1
-            feature_card.configure(height=max(116, 62 + 16 * desc_lines))
-            feature_card.pack_propagate(True)
-            feature_card.bind("<Configure>", lambda event: self.root.after_idle(self._apply_wrap), add="+")
-            feature_card.grid(row=i // 2, column=i % 2, sticky="nsew",
-                              padx=(0, 6) if i % 2 == 0 else (6, 0), pady=6)
+            feature_card = ctk.CTkFrame(
+                grid, corner_radius=ui_tokens.RADIUS["card"],
+                fg_color=_PAIR["panel"], border_width=1,
+                border_color=_PAIR["border"])
+            feature_card.grid(row=i, column=0, sticky="ew", pady=(0, 8))
+            feature_card.bind(
+                "<Configure>",
+                lambda event: self.root.after_idle(self._apply_wrap), add="+")
             head = ctk.CTkFrame(feature_card, fg_color="transparent")
-            head.pack(fill="x", padx=12, pady=(11, 0))
+            head.pack(fill="x", padx=14, pady=(11, 0))
             var = tk.BooleanVar(value=bool(entry.get("default_on", True)))
             self.var_on[entry["id"]] = var
-            toggle = ctk.CTkCheckBox(head, text=entry["title"], variable=var,
-                                     command=self._selection_changed,
-                                     checkbox_width=18, checkbox_height=18,
-                                     fg_color=_PAIR["accent"], hover_color=_PAIR["accent_hover"],
-                                     text_color=_PAIR["fg"], font=self._font(10, "bold"))
+            toggle = ctk.CTkCheckBox(
+                head, text=entry["title"], variable=var,
+                command=self._selection_changed,
+                checkbox_width=20, checkbox_height=20, border_width=2,
+                corner_radius=ui_tokens.RADIUS["control"],
+                fg_color=_PAIR["accent_fill"],
+                hover_color=_PAIR["accent_hover"],
+                border_color=_PAIR["border_strong"],
+                checkmark_color=_PAIR["on_accent"],
+                text_color=_PAIR["fg"],
+                font=self._font(ui_tokens.FONT_ROLES["body"], "bold"))
             toggle.pack(side="left")
             chip_var = tk.StringVar(value="未检查")
-            chip = ctk.CTkLabel(head, textvariable=chip_var, height=22, corner_radius=7,
-                                fg_color=_PAIR["panel_alt"], text_color=_PAIR["dim"],
-                                font=self._font(8), padx=7)
+            chip = ctk.CTkLabel(
+                head, textvariable=chip_var, height=24, corner_radius=8,
+                fg_color=_PAIR["panel_alt"], text_color=_PAIR["dim"],
+                font=self._font(ui_tokens.FONT_ROLES["meta"]), padx=8)
             chip.pack(side="right")
-            ctk.CTkLabel(feature_card, text=desc, anchor="w", justify="left",
-                         wraplength=410, text_color=_PAIR["dim"], font=self._font(9)).pack(
-                             fill="x", padx=12, pady=(7, 0))
+            summary = entry.get("summary") or entry.get("desc", "")
+            ctk.CTkLabel(
+                feature_card, text=summary, anchor="w", justify="left",
+                wraplength=1, text_color=_PAIR["dim"],
+                font=self._font(ui_tokens.FONT_ROLES["secondary"])).pack(
+                    fill="x", padx=14, pady=(6, 0))
             reason_var = tk.StringVar(value="")
-            reason = ctk.CTkLabel(feature_card, textvariable=reason_var, anchor="w",
-                                  justify="left", wraplength=410,
-                                  text_color=_PAIR["bad"], font=self._font(9))
+            reason = ctk.CTkLabel(
+                feature_card, textvariable=reason_var, anchor="w",
+                justify="left", wraplength=1, text_color=_PAIR["bad"],
+                font=self._font(ui_tokens.FONT_ROLES["meta"]))
             self.rows[entry["id"]] = _FeatureRow(
                 entry, feature_card, toggle, chip_var, chip, reason_var, reason)
         if "intro" in self.rows:
             self.var_skip = self.var_on["intro"]
             self.chk_skip = self.rows["intro"].toggle
 
-        actions, body = self._card(page)
-        ctk.CTkLabel(body, text="执行", anchor="w", text_color=_PAIR["fg"],
-                     font=self._font(13, "bold")).pack(anchor="w")
-        ctk.CTkLabel(body, text="模拟过程和结果确认都只作用于隔离副本，不会写入原游戏。只有单独点击“开始处理”才会修改原游戏。",
-                     anchor="w", justify="left", wraplength=730,
-                     text_color=_PAIR["dim"], font=self._font(9)).pack(
-                         fill="x", pady=(4, 9))
+        _, body = self._card(page)
+        ctk.CTkLabel(
+            body, text="模拟与安装", anchor="w", text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["section"], "bold")).pack(
+                anchor="w")
+        ctk.CTkLabel(
+            body, text="模拟只作用于隔离副本；只有“安装到游戏”会写入原目录。",
+            anchor="w", justify="left", wraplength=1,
+            text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"])).pack(
+                fill="x", pady=(4, 10))
         self.sim_result_var = tk.StringVar(value="尚未运行模拟安装。")
         self.sim_result_label = ctk.CTkLabel(
-            body, textvariable=self.sim_result_var, anchor="w", justify="left",
-            wraplength=730, text_color=_PAIR["dim"], font=self._font(10, "bold"))
+            body, textvariable=self.sim_result_var, anchor="w",
+            justify="left", wraplength=1, text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["body"], "bold"))
         self.sim_result_label.pack(anchor="w", pady=(0, 8))
+
         self.sim_confirm_frame = ctk.CTkFrame(body, fg_color="transparent")
         self.btn_sim_success = ctk.CTkButton(
-            self.sim_confirm_frame, text="已进入主菜单", height=30,
-            fg_color=_PAIR["accent"], hover_color=_PAIR["accent_hover"],
-            font=self._font(9), command=self.confirm_simulation_success)
+            self.sim_confirm_frame, text="已进入主菜单", height=32,
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color=_PAIR["accent_fill"], hover_color=_PAIR["accent_hover"],
+            text_color=_PAIR["on_accent"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"], "bold"),
+            command=self.confirm_simulation_success)
         self.btn_sim_failure = ctk.CTkButton(
-            self.sim_confirm_frame, text="启动失败", height=30,
-            fg_color="transparent", border_width=1, border_color=_PAIR["border"],
+            self.sim_confirm_frame, text="启动失败", height=32,
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color="transparent", border_width=1,
+            border_color=_PAIR["border_strong"],
             hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
-            font=self._font(9), command=self.confirm_simulation_failure)
+            font=self._font(ui_tokens.FONT_ROLES["meta"]),
+            command=self.confirm_simulation_failure)
+        self.btn_sim_gameplay = ctk.CTkButton(
+            self.sim_confirm_frame, text="已测试剧情 / 读档", height=32,
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color=_PAIR["panel_alt"], hover_color=_PAIR["accent_soft"],
+            text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"]),
+            state="disabled", command=self.confirm_simulation_gameplay)
+        self.btn_sim_finish = ctk.CTkButton(
+            self.sim_confirm_frame, text="结束模拟并清理", height=32,
+            corner_radius=ui_tokens.RADIUS["button"], fg_color="transparent",
+            border_width=1, border_color=_PAIR["border_strong"],
+            hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"]),
+            command=lambda: self._cleanup_simulation(
+                stop=self.sim_launched and not self.sim_process_exited))
+        self.btn_sim_cleanup = ctk.CTkButton(
+            self.sim_confirm_frame, text="重试清理", height=32,
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color=_PAIR["bad"], hover_color=_PAIR["bad"],
+            text_color=_PAIR["on_accent"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"], "bold"),
+            command=lambda: self._cleanup_simulation(
+                stop=self.sim_launched and not self.sim_process_exited))
         self.btn_sim_success.pack(side="left")
         self.btn_sim_failure.pack(side="left", padx=(7, 0))
-        self.btn_sim_gameplay = ctk.CTkButton(
-            self.sim_confirm_frame, text="已测试剧情 / 读档", height=30,
-            fg_color=_PAIR["accent"], hover_color=_PAIR["accent_hover"],
-            font=self._font(9), state="disabled", command=self.confirm_simulation_gameplay)
         self.btn_sim_gameplay.pack(side="left", padx=(7, 0))
+        self.btn_sim_finish.pack(side="left", padx=(7, 0))
         self.sim_confirm_frame.pack_forget()
-        self.buttons = ctk.CTkFrame(body, fg_color="transparent")
+        self.btn_sim_cleanup.pack_forget()
+
+        footer = ctk.CTkFrame(
+            outer, corner_radius=ui_tokens.RADIUS["card"],
+            fg_color=_PAIR["panel"], border_width=1,
+            border_color=_PAIR["border"])
+        footer.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        footer_inner = ctk.CTkFrame(footer, fg_color="transparent")
+        footer_inner.pack(fill="x", padx=14, pady=11)
+        self.buttons = ctk.CTkFrame(footer_inner, fg_color="transparent")
         buttons = self.buttons
         buttons.pack(fill="x")
-        self.btn_dry = ctk.CTkButton(buttons, text="模拟安装并运行", height=37,
-                                     corner_radius=9, fg_color=_PAIR["accent"],
-                                     hover_color=_PAIR["accent_hover"],
-                                     font=self._font(10, "bold"), command=self.simulate_run)
+        self.btn_dry = ctk.CTkButton(
+            buttons, text="模拟安装并运行", height=38,
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color=_PAIR["accent_fill"], hover_color=_PAIR["accent_hover"],
+            text_color=_PAIR["on_accent"], border_width=2,
+            border_color=_PAIR["accent_fill"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"], "bold"),
+            command=self.simulate_run)
         self.btn_dry.pack(side="left")
-        self.btn_go = ctk.CTkButton(buttons, text="开始处理", height=37,
-                                    corner_radius=9, fg_color=_PAIR["panel_alt"],
-                                    hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
-                                    font=self._font(10), command=self.install)
-        self.btn_go.pack(side="left", padx=(7, 0))
-        self.btn_undo = ctk.CTkButton(buttons, text="撤销还原", height=37,
-                                      corner_radius=9, fg_color="transparent",
-                                      border_width=1, border_color=_PAIR["border"],
-                                      hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
-                                      font=self._font(10), command=self.revert)
-        self.btn_undo.pack(side="left", padx=(7, 0))
+        self.btn_go = ctk.CTkButton(
+            buttons, text="安装到游戏", height=38,
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color=_PAIR["panel_alt"], hover_color=_PAIR["accent_soft"],
+            text_color=_PAIR["fg"], border_width=2,
+            border_color=_PAIR["panel_alt"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"]),
+            command=self.install)
+        self.btn_go.pack(side="left", padx=(8, 0))
+        self.btn_undo = ctk.CTkButton(
+            buttons, text="撤销还原", height=38,
+            corner_radius=ui_tokens.RADIUS["button"], fg_color="transparent",
+            border_width=1, border_color=_PAIR["border_strong"],
+            hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"]),
+            command=self.revert)
+        self.btn_undo.pack(side="left", padx=(8, 0))
         self.action_buttons = {"simulate": self.btn_dry, "go": self.btn_go,
                                "undo": self.btn_undo}
         self.var_action_hint = tk.StringVar(value="")
-        ctk.CTkLabel(body, textvariable=self.var_action_hint, anchor="w",
-                     text_color=_PAIR["dim"], font=self._font(9)).pack(
-                         anchor="w", pady=(7, 0))
+        ctk.CTkLabel(
+            footer_inner, textvariable=self.var_action_hint, anchor="w",
+            justify="left", wraplength=1, text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"])).pack(
+                anchor="w", pady=(8, 0))
+
         self.sim_stage_vars = {}
         self.sim_stage_labels = {}
-        self.sim_card = ctk.CTkFrame(body, corner_radius=11,
-                                     fg_color=_PAIR["panel_alt"],
-                                     border_width=1, border_color=_PAIR["border"])
-        self.sim_card.pack(fill="x", pady=(11, 0))
-        sim_body = ctk.CTkFrame(self.sim_card, fg_color="transparent")
-        sim_body.pack(fill="x", padx=12, pady=11)
-        ctk.CTkLabel(sim_body, text="本次模拟步骤", anchor="w",
-                     text_color=_PAIR["fg"], font=self._font(12, "bold")).pack(anchor="w")
-        ctk.CTkLabel(sim_body, text="正常退出不代表已进入主菜单；确认结果后清理副本，不会修改原游戏。",
-                     anchor="w", text_color=_PAIR["dim"], font=self._font(9)).pack(
-                         anchor="w", pady=(3, 7))
+        self.sim_card = ctk.CTkFrame(body, fg_color="transparent")
+        self.sim_card.pack(fill="x", pady=(12, 0))
+        ctk.CTkFrame(self.sim_card, height=1, fg_color=_PAIR["border"]).pack(
+            fill="x", pady=(0, 9))
+        ctk.CTkLabel(
+            self.sim_card, text="模拟步骤", anchor="w", text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["card_title"], "bold")).pack(
+                anchor="w")
+        ctk.CTkLabel(
+            self.sim_card,
+            text="进程正常退出不等于进入主菜单；确认结果后清理副本，不会修改原游戏。",
+            anchor="w", justify="left", wraplength=1,
+            text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"])).pack(
+                anchor="w", pady=(3, 7))
         for key, name in (("compat", "兼容预检"), ("copy", "准备隔离副本"),
                           ("install", "模拟安装补丁"), ("launch", "启动副本"),
                           ("confirm", "确认主菜单"), ("gameplay", "剧情场景验证")):
             var = tk.StringVar(value=name + "：等待")
-            label = ctk.CTkLabel(sim_body, textvariable=var, anchor="w",
-                                 text_color=_PAIR["dim"], font=self._font(9))
+            label = ctk.CTkLabel(
+                self.sim_card, textvariable=var, anchor="w",
+                text_color=_PAIR["dim"],
+                font=self._font(ui_tokens.FONT_ROLES["meta"]))
             label.pack(anchor="w", pady=2)
             self.sim_stage_vars[key] = var
             self.sim_stage_labels[key] = label
@@ -1085,140 +1359,245 @@ class App(_OperationMixin):
         body.pack(fill="both", expand=True)
         tools = ctk.CTkFrame(body, fg_color="transparent")
         tools.pack(fill="x", pady=(0, 9))
-        self.btn_add_game = ctk.CTkButton(tools, text="添加游戏…", height=34,
-                                          corner_radius=9, fg_color=_PAIR["accent"],
-                                          hover_color=_PAIR["accent_hover"],
-                                          font=self._font(10), command=self.add_game)
+        self.btn_add_game = ctk.CTkButton(
+            tools, text="添加游戏…", height=36,
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color=_PAIR["accent_fill"], hover_color=_PAIR["accent_hover"],
+            text_color=_PAIR["on_accent"], border_width=2,
+            border_color=_PAIR["accent_fill"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"], "bold"),
+            command=self.add_game)
         self.btn_add_game.pack(side="left")
-        ctk.CTkLabel(tools, text="手动添加 · 不会扫描整盘", text_color=_PAIR["dim"],
-                     font=self._font(9)).pack(side="left", padx=10)
+        ctk.CTkLabel(
+            tools, text="只保存手动添加的位置，不扫描整盘", text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"])).pack(
+                side="left", padx=12)
         self.library_scroll = ctk.CTkScrollableFrame(body, fg_color="transparent")
         self.library_scroll.pack(fill="both", expand=True)
         self._render_library()
+
+    def _library_status(self, path):
+        if not os.path.isdir(path):
+            return "unsupported", "路径不可用"
+        try:
+            engine = engine_adapters.detect(path)
+        except OSError:
+            return "unsupported", "不可访问"
+        if engine["id"] in ("unknown", "ambiguous"):
+            return "unsupported", "未识别"
+        name = {"rpgmaker_mv": "RPG Maker MV",
+                "rpgmaker_mz": "RPG Maker MZ"}.get(engine["id"], "Ren'Py")
+        version = engine.get("version")
+        return "supported", name + (" " + version if version else "")
 
     def _render_library(self):
         for widget in self.library_scroll.winfo_children():
             widget.destroy()
         if not self.state.get("games"):
-            _, body = self._card(self.library_scroll)
-            ctk.CTkLabel(body, text="游戏库为空", text_color=_PAIR["fg"],
-                         font=self._font(12, "bold")).pack(anchor="w")
-            ctk.CTkLabel(body, text="添加包含 game/ 子目录的游戏根目录。",
-                         text_color=_PAIR["dim"], font=self._font(9)).pack(
-                             anchor="w", pady=(5, 0))
+            _, body = self._card(self.library_scroll, padding=ui_tokens.SPACING[4])
+            ctk.CTkLabel(
+                body, text="游戏库为空", text_color=_PAIR["fg"],
+                font=self._font(ui_tokens.FONT_ROLES["section"], "bold")).pack(
+                    anchor="w")
+            ctk.CTkLabel(
+                body, text="点击上方“添加游戏…”，选择一个包含 game/ 与引擎文件的根目录。",
+                anchor="w", justify="left", wraplength=1, text_color=_PAIR["dim"],
+                font=self._font(ui_tokens.FONT_ROLES["secondary"])).pack(
+                    anchor="w", pady=(6, 0))
+            self._install_focus()
+            self._apply_wrap()
             return
         for entry in self.state["games"]:
-            _, body = self._card(self.library_scroll, padding=13)
+            level, status = self._library_status(entry["path"])
+            available = level == "supported"
+            _, body = self._card(self.library_scroll, padding=ui_tokens.SPACING[2])
             body.grid_columnconfigure(0, weight=1)
-            ctk.CTkLabel(body, text=entry["name"], anchor="w", text_color=_PAIR["fg"],
-                         font=self._font(11, "bold")).grid(row=0, column=0, sticky="w")
-            exists = os.path.isdir(os.path.join(entry["path"], "game"))
-            ctk.CTkLabel(body, text="可访问" if exists else "路径不可用",
-                         text_color=_PAIR["ok"] if exists else _PAIR["bad"],
-                         font=self._font(8)).grid(row=0, column=1, sticky="e")
-            ctk.CTkLabel(body, text=entry["path"], anchor="w", wraplength=700,
-                         text_color=_PAIR["dim"], font=self._font(8)).grid(
-                             row=1, column=0, columnspan=2, sticky="ew", pady=(4, 8))
+            ctk.CTkLabel(
+                body, text=entry["name"], anchor="w", text_color=_PAIR["fg"],
+                font=self._font(ui_tokens.FONT_ROLES["card_title"], "bold")).grid(
+                    row=0, column=0, sticky="w")
+            ctk.CTkLabel(
+                body, text=status, text_color=_PAIR["ok"] if available else _PAIR["bad"],
+                font=self._font(ui_tokens.FONT_ROLES["meta"])).grid(
+                    row=0, column=1, sticky="e", padx=(8, 0))
+            ctk.CTkLabel(
+                body, text=entry["path"], anchor="w", justify="left",
+                wraplength=1, text_color=_PAIR["dim"],
+                font=self._font(ui_tokens.FONT_ROLES["meta"])).grid(
+                    row=1, column=0, columnspan=2, sticky="ew", pady=(4, 9))
             buttons = ctk.CTkFrame(body, fg_color="transparent")
             buttons.grid(row=2, column=0, columnspan=2, sticky="ew")
-            ctk.CTkButton(buttons, text="打开处理页", width=92, height=28,
-                          corner_radius=8, fg_color=_PAIR["accent"],
-                          hover_color=_PAIR["accent_hover"], font=self._font(8),
-                          command=lambda path=entry["path"]: self.set_game_dir(path)).pack(side="left")
-            ctk.CTkButton(buttons, text="重命名", width=68, height=28,
-                          corner_radius=8, fg_color="transparent", border_width=1,
-                          border_color=_PAIR["border"], hover_color=_PAIR["accent_soft"],
-                          text_color=_PAIR["fg"], font=self._font(8),
-                          command=lambda item=entry: self.rename_game(item)).pack(
-                              side="left", padx=(7, 0))
-            ctk.CTkButton(buttons, text="移出游戏库", width=80, height=28,
-                          corner_radius=8, fg_color="transparent", border_width=1,
-                          border_color=_PAIR["border"], hover_color=_PAIR["accent_soft"],
-                          text_color=_PAIR["fg"], font=self._font(8),
-                          command=lambda path=entry["path"]: self.remove_game(path)).pack(side="right")
+            open_button = ctk.CTkButton(
+                buttons, text="打开处理页", width=102, height=30,
+                corner_radius=ui_tokens.RADIUS["button"],
+                fg_color=_PAIR["accent_fill"], hover_color=_PAIR["accent_hover"],
+                text_color=_PAIR["on_accent"], border_width=2,
+                border_color=_PAIR["accent_fill"],
+                font=self._font(ui_tokens.FONT_ROLES["meta"], "bold"),
+                state="normal" if available else "disabled",
+                command=lambda path=entry["path"]: self.set_game_dir(path))
+            open_button.pack(side="left")
+            ctk.CTkButton(
+                buttons, text="重命名", width=74, height=30,
+                corner_radius=ui_tokens.RADIUS["button"],
+                fg_color="transparent", border_width=1,
+                border_color=_PAIR["border_strong"],
+                hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
+                font=self._font(ui_tokens.FONT_ROLES["meta"]),
+                command=lambda item=entry: self.rename_game(item)).pack(
+                    side="left", padx=(8, 0))
+            ctk.CTkButton(
+                buttons, text="移出游戏库", width=88, height=30,
+                corner_radius=ui_tokens.RADIUS["button"],
+                fg_color="transparent", border_width=1,
+                border_color=_PAIR["border_strong"],
+                hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
+                font=self._font(ui_tokens.FONT_ROLES["meta"]),
+                command=lambda path=entry["path"]: self.remove_game(path)).pack(
+                    side="right")
+        self._install_focus()
+        self._apply_wrap()
+        # A newly created card has no measured width yet.  Run once after the
+        # geometry manager has settled so a path never keeps wraplength=1.
+        self.root.after(50, self._apply_wrap)
 
     def _build_toolbox(self, parent):
         scroll = ctk.CTkScrollableFrame(parent, fg_color="transparent")
         scroll.pack(fill="both", expand=True)
-        _, body = self._card(scroll)
-        ctk.CTkLabel(body, text="当前游戏诊断", anchor="w", text_color=_PAIR["fg"],
-                     font=self._font(12, "bold")).pack(anchor="w")
-        ctk.CTkLabel(body, text="由兼容性预检生成，只读游戏信息。",
-                     anchor="w", text_color=_PAIR["dim"], font=self._font(9)).pack(
-                         anchor="w", pady=(4, 8))
+        _, body = self._card(scroll, padding=ui_tokens.SPACING[4])
+        ctk.CTkLabel(
+            body, text="兼容性与安装诊断", anchor="w", text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["section"], "bold")).pack(
+                anchor="w")
+        ctk.CTkLabel(
+            body, text="由兼容性预检生成，只读游戏结构，不执行游戏代码。",
+            anchor="w", justify="left", wraplength=1, text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"])).pack(
+                anchor="w", pady=(5, 12))
         self.var_toolbox_info = tk.StringVar(value="尚未选择游戏。")
-        ctk.CTkLabel(body, textvariable=self.var_toolbox_info, anchor="nw",
-                     justify="left", wraplength=740, text_color=_PAIR["fg"],
-                     font=self._font(9)).pack(fill="x")
+        ctk.CTkLabel(
+            body, textvariable=self.var_toolbox_info, anchor="nw",
+            justify="left", wraplength=1, text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"])).pack(fill="x")
         self.var_toolbox_installed = tk.StringVar(value="")
-        ctk.CTkLabel(body, textvariable=self.var_toolbox_installed, anchor="w",
-                     text_color=_PAIR["dim"], font=self._font(9)).pack(
-                         anchor="w", pady=(8, 0))
+        ctk.CTkLabel(
+            body, textvariable=self.var_toolbox_installed, anchor="w",
+            justify="left", wraplength=1, text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"])).pack(
+                anchor="w", pady=(10, 0))
         buttons = ctk.CTkFrame(body, fg_color="transparent")
-        buttons.pack(fill="x", pady=(12, 0))
-        ctk.CTkButton(buttons, text="重新检查", height=30, corner_radius=8,
-                      fg_color=_PAIR["accent"], hover_color=_PAIR["accent_hover"],
-                      font=self._font(9), command=self.refresh_game).pack(side="left")
-        ctk.CTkButton(buttons, text="打开游戏目录", height=30, corner_radius=8,
-                      fg_color="transparent", border_width=1, border_color=_PAIR["border"],
-                      hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
-                      font=self._font(9), command=self.open_game_folder).pack(
-                          side="left", padx=(7, 0))
+        buttons.pack(fill="x", pady=(14, 0))
+        ctk.CTkButton(
+            buttons, text="重新检查", height=32,
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color=_PAIR["accent_fill"], hover_color=_PAIR["accent_hover"],
+            text_color=_PAIR["on_accent"], border_width=2,
+            border_color=_PAIR["accent_fill"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"], "bold"),
+            command=self.refresh_game).pack(side="left")
+        ctk.CTkButton(
+            buttons, text="打开游戏目录", height=32,
+            corner_radius=ui_tokens.RADIUS["button"], fg_color="transparent",
+            border_width=1, border_color=_PAIR["border_strong"],
+            hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"]),
+            command=self.open_game_folder).pack(side="left", padx=(8, 0))
 
     def _build_log(self, parent):
         body = ctk.CTkFrame(parent, fg_color="transparent")
         body.pack(fill="both", expand=True)
         tools = ctk.CTkFrame(body, fg_color="transparent")
         tools.pack(fill="x", pady=(0, 8))
-        for text, command, side in (("清空", self.clear_log, "left"),
-                                    ("导出…", self.export_log, "right"),
-                                    ("复制全部", self.copy_log, "right")):
-            ctk.CTkButton(tools, text=text, width=75, height=30, corner_radius=8,
-                          fg_color="transparent", border_width=1,
-                          border_color=_PAIR["border"], hover_color=_PAIR["accent_soft"],
-                          text_color=_PAIR["fg"], font=self._font(9),
-                          command=command).pack(side=side, padx=(6, 0) if side == "right" else 0)
-        self.log_card = ctk.CTkFrame(body, corner_radius=13, fg_color=_PAIR["panel"],
-                                     border_width=1, border_color=_PAIR["border"])
+        self.btn_clear_log = ctk.CTkButton(
+            tools, text="清空", width=76, height=32,
+            corner_radius=ui_tokens.RADIUS["button"], fg_color="transparent",
+            border_width=1, border_color=_PAIR["border_strong"],
+            hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"]),
+            command=self.clear_log)
+        self.btn_clear_log.pack(side="left")
+        self.btn_export_log = ctk.CTkButton(
+            tools, text="导出…", width=76, height=32,
+            corner_radius=ui_tokens.RADIUS["button"], fg_color="transparent",
+            border_width=1, border_color=_PAIR["border_strong"],
+            hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"]),
+            command=self.export_log)
+        self.btn_export_log.pack(side="right", padx=(8, 0))
+        self.btn_copy_log = ctk.CTkButton(
+            tools, text="复制全部", width=88, height=32,
+            corner_radius=ui_tokens.RADIUS["button"], fg_color="transparent",
+            border_width=1, border_color=_PAIR["border_strong"],
+            hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"]),
+            command=self.copy_log)
+        self.btn_copy_log.pack(side="right")
+        self.log_card = ctk.CTkFrame(
+            body, corner_radius=ui_tokens.RADIUS["card"],
+            fg_color=_PAIR["panel"], border_width=1,
+            border_color=_PAIR["border"])
         self.log_card.pack(fill="both", expand=True)
-        self.log = ctk.CTkTextbox(self.log_card, wrap="none", corner_radius=10,
-                                  fg_color=_PAIR["panel"], text_color=_PAIR["fg"],
-                                  font=ctk.CTkFont(family="Consolas", size=10),
-                                  border_width=0)
-        self.log.pack(fill="both", expand=True, padx=9, pady=9)
+        self.log = ctk.CTkTextbox(
+            self.log_card, wrap="none",
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color=_PAIR["panel"], text_color=_PAIR["fg"],
+            font=ctk.CTkFont(family="Consolas",
+                             size=ui_tokens.FONT_ROLES["mono"]),
+            border_width=1, border_color=_PAIR["border"])
+        self.log.pack(fill="both", expand=True, padx=8, pady=8)
         self.log.configure(state="disabled")
+        self.log_empty = ctk.CTkLabel(
+            self.log_card, text="暂无日志\n处理或模拟运行后，输出会显示在这里。",
+            justify="center", text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["body"]))
+        self.log_empty.place(relx=0.5, rely=0.45, anchor="center")
         self.var_log = tk.BooleanVar(value=False)
+        self._update_log_actions()
 
     def _build_settings(self, parent):
         body = ctk.CTkScrollableFrame(parent, fg_color="transparent")
         body.pack(fill="both", expand=True)
-        _, card = self._card(body)
-        ctk.CTkLabel(card, text="外观", anchor="w", text_color=_PAIR["fg"],
-                     font=self._font(12, "bold")).pack(anchor="w")
-        ctk.CTkLabel(card, text="跟随系统深浅色，也可以手动指定。",
-                     anchor="w", text_color=_PAIR["dim"], font=self._font(9)).pack(
-                         anchor="w", pady=(4, 9))
+        _, card = self._card(body, padding=ui_tokens.SPACING[4])
+        ctk.CTkLabel(
+            card, text="外观", anchor="w", text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["section"], "bold")).pack(
+                anchor="w")
+        ctk.CTkLabel(
+            card, text="跟随系统深浅色，也可以手动指定。两种主题使用同一套对比度标准。",
+            anchor="w", justify="left", wraplength=1, text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"])).pack(
+                anchor="w", pady=(5, 12))
         self.theme_modes = {"跟随系统": "system", "浅色": "light", "深色": "dark"}
         self.theme_segment = ctk.CTkSegmentedButton(
             card, values=list(self.theme_modes), command=self._mode_from_label,
-            selected_color=_PAIR["accent"], selected_hover_color=_PAIR["accent_hover"],
-            unselected_color=_PAIR["panel_alt"], unselected_hover_color=_PAIR["accent_soft"],
-            text_color=_PAIR["fg"], font=self._font(9))
+            height=36, corner_radius=ui_tokens.RADIUS["button"],
+            border_width=1,
+            selected_color=_PAIR["accent_soft"],
+            selected_hover_color=_PAIR["accent_soft"],
+            unselected_color=_PAIR["panel_alt"],
+            unselected_hover_color=_PAIR["accent_soft"],
+            text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"]))
         self.theme_segment.pack(fill="x")
-        _, size_card = self._card(body)
-        ctk.CTkLabel(size_card, text="窗口大小", anchor="w", text_color=_PAIR["fg"],
-                     font=self._font(12, "bold")).pack(anchor="w")
+        _, size_card = self._card(body, padding=ui_tokens.SPACING[4])
+        ctk.CTkLabel(
+            size_card, text="窗口大小", anchor="w", text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["section"], "bold")).pack(
+                anchor="w")
         size = self.state.get("window") or app_state.DEFAULT_WINDOW
         self.var_window = tk.StringVar(value="%d × %d（自动记住）" % (
             size.get("width", 1180), size.get("height", 780)))
-        ctk.CTkLabel(size_card, textvariable=self.var_window, anchor="w",
-                     text_color=_PAIR["dim"], font=self._font(9)).pack(
-                         anchor="w", pady=(6, 0))
-        _, about = self._card(body)
-        ctk.CTkLabel(about, text="SLG Ren'Py Toolkit · v" + branding.APP_VERSION +
-                     "\n提供可撤销补丁与隔离副本模拟运行。",
-                     anchor="w", justify="left", text_color=_PAIR["dim"],
-                     font=self._font(9)).pack(anchor="w")
+        ctk.CTkLabel(
+            size_card, textvariable=self.var_window, anchor="w",
+            text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"])).pack(
+                anchor="w", pady=(6, 0))
+        _, about = self._card(body, padding=ui_tokens.SPACING[4])
+        ctk.CTkLabel(
+            about, text="SLG Ren'Py Toolkit · v" + branding.APP_VERSION +
+            "（界面测试版）\n提供可撤销补丁与隔离副本模拟运行。",
+            anchor="w", justify="left", wraplength=1, text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"])).pack(anchor="w")
 
     def _show_page(self, page_id):
         if page_id not in self.pages:
@@ -1231,11 +1610,21 @@ class App(_OperationMixin):
         self.page_subtitle.configure(text=subtitle)
         for key, button in self.nav_buttons.items():
             selected = key == page_id
-            button.configure(fg_color=_PAIR["accent_soft"] if selected else "transparent",
-                             text_color=_PAIR["accent"] if selected else _PAIR["dim"],
-                             font=self._font(11, "bold" if selected else "normal"))
+            if selected:
+                button.configure(
+                    fg_color=_PAIR["accent_soft"],
+                    text_color=_PAIR["accent_text"],
+                    font=self._font(ui_tokens.FONT_ROLES["secondary"], "bold"))
+            else:
+                button.configure(
+                    fg_color="transparent", text_color=_PAIR["dim"],
+                    font=self._font(ui_tokens.FONT_ROLES["secondary"]))
         if page_id == "library":
             self._render_library()
+        elif page_id == "settings":
+            self.theme_segment.set({"system": "跟随系统", "light": "浅色",
+                                    "dark": "深色"}[self._theme_mode])
+        self.root.after(50, self._apply_wrap)
 
     def _apply_theme(self, theme, persist=True):
         mode = theme if theme in ("system", "light", "dark") else "system"
@@ -1254,6 +1643,7 @@ class App(_OperationMixin):
         if persist:
             self.state["appearance"] = mode
             self._persist_state()
+        self.root.after_idle(self._apply_wrap)
 
     def _toggle_theme(self):
         modes = ("system", "light", "dark")
@@ -1262,35 +1652,100 @@ class App(_OperationMixin):
     def _mode_from_label(self, label):
         self._apply_theme(self.theme_modes.get(label, "system"))
 
+    def _bind_shortcuts(self):
+        """Keyboard paths for the actions a mouse user would click."""
+        self.root.bind("<Control-o>", lambda _event: self.pick())
+        self.root.bind("<F5>", lambda _event: self.refresh_game())
+        self.root.bind("<Control-l>", lambda _event: self._show_page("log"))
+        self.root.bind("<Control-Return>", lambda _event: self.simulate_run())
+        self.root.bind("<Escape>", lambda _event: self.root.focus_set())
+
+    def _install_focus(self):
+        """Give every visible control a Tab stop and a focus ring."""
+        if not hasattr(self, "root"):
+            return
+        for widget in _walk(self.root):
+            if not isinstance(widget, (
+                    ctk.CTkButton, ctk.CTkCheckBox, ctk.CTkEntry,
+                    ctk.CTkSegmentedButton, ctk.CTkTextbox, ctk.CTkRadioButton)):
+                continue
+            if getattr(widget, "_rpykit_focus_target", None) is not None:
+                continue
+            ui_focus.install(widget, _PAIR["focus"], _PAIR["border"])
+
+    def _apply_responsive(self):
+        """Keep the reading measure sane on very wide windows."""
+        if not hasattr(self, "content"):
+            return
+        try:
+            width = self.content.winfo_width()
+        except tk.TclError:
+            return
+        if width <= 1:
+            return
+        pad = 24 if width < 1240 else max(24, (width - 1180) // 2)
+        for widget in (self.header, self.page_host, self.bar):
+            try:
+                widget.grid_configure(padx=(pad, pad))
+            except tk.TclError:
+                pass
+
     def _apply_wrap(self):
         # CTk reports physical widget widths but takes logical wrap lengths.
-        # Let packed labels determine each card's height so long supported or
-        # partial-support reasons remain readable in the scrollable page.
+        # Let every label determine its own height from the width it actually
+        # has; fixed 700/740/760-pixel wraps used to clip MV/MZ paths and long
+        # support reasons on narrow windows.
         if not hasattr(self, "pages"):
             return
-        pending = [self.pages["process"]]
+        self._apply_responsive()
+        pending = list(self.pages.values())
         while pending:
             widget = pending.pop()
             pending.extend(widget.winfo_children())
-            if not isinstance(widget, ctk.CTkLabel) or not widget.cget("wraplength"):
+            if not isinstance(widget, ctk.CTkLabel):
+                continue
+            try:
+                if not widget.cget("wraplength"):
+                    continue
+            except tk.TclError:
                 continue
             parent = widget.master
             width = parent.winfo_width()
             if width <= 1:
                 continue
             scaling = parent._get_widget_scaling() if hasattr(parent, "_get_widget_scaling") else 1
-            wrap = max(160, int(width / scaling) - 28)
+            wrap = max(180, int(width / scaling) - 32)
             if widget.cget("wraplength") != wrap:
                 widget.configure(wraplength=wrap)
 
+    def _pack_sim_confirm(self, cleanup=False):
+        if not hasattr(self, "sim_confirm_frame"):
+            return
+        for button in (self.btn_sim_success, self.btn_sim_failure,
+                       self.btn_sim_gameplay, self.btn_sim_finish,
+                       self.btn_sim_cleanup):
+            button.pack_forget()
+        if cleanup:
+            self.btn_sim_cleanup.pack(side="left")
+        else:
+            self.btn_sim_success.pack(side="left")
+            self.btn_sim_failure.pack(side="left", padx=(7, 0))
+            self.btn_sim_gameplay.pack(side="left", padx=(7, 0))
+            self.btn_sim_finish.pack(side="left", padx=(7, 0))
+            self.btn_sim_cleanup.pack_forget()
+        self.sim_confirm_frame.pack(anchor="w", pady=(2, 0))
+
     def _reset_simulation_status(self):
         self.sim_stage_state = {}
+        self.sim_gameplay_confirmed = False
         if hasattr(self, "btn_sim_gameplay"):
             self.btn_sim_gameplay.configure(state="disabled")
         for key, text in self._SIM_STAGE_DEFAULTS.items():
             self._set_sim_stage(key, "pending", text)
         self._set_sim_result("info", "尚未运行模拟安装。将在隔离副本中测试，不会修改原游戏。")
         self.sim_confirm_frame.pack_forget()
+        if hasattr(self, "btn_sim_cleanup"):
+            self.btn_sim_cleanup.pack_forget()
 
     def _set_sim_stage(self, stage_id, status, message=None):
         colors = {"success": "ok", "ok": "ok", "done": "ok", "passed": "ok",
@@ -1337,11 +1792,10 @@ class App(_OperationMixin):
                 self.lbl_reasons.pack(anchor="w", before=self.lbl_state, pady=(4, 0))
         else:
             self.lbl_reasons.pack_forget()
-        details = ["游戏：" + str(survey.get("label", "未知")),
-                   _describe(survey)]
-        reasons = survey.get("reasons") or []
+        details = _describe_details(survey)
+        reasons = ui_text.localize_reasons(survey.get("reasons") or [])
         if reasons:
-            details.append("兼容提示：\n" + "\n".join("• " + str(x) for x in reasons))
+            details.append("兼容提示：\n" + "\n".join("\u2022 " + x for x in reasons))
         self.var_toolbox_info.set("\n".join(details))
 
     def _paint_chips(self, state):
@@ -1418,36 +1872,47 @@ class App(_OperationMixin):
             self._set_state("warn", "检测到旧版补丁模板；可以重新处理更新。")
         self._set_buttons()
 
+    def _handle_event(self, item):
+        if not isinstance(item, tuple):
+            self._log(item)
+            return
+        event = item[0]
+        if event == "__scan_done__":
+            self._scan_finished(*item[1:])
+        elif event == "__done__":
+            self._finish(item[1])
+        elif event == "__sim_log__":
+            self._log(str(item[1]))
+        elif event == "__sim_stage__":
+            self._set_sim_stage(item[1], item[2], item[3])
+        elif event == "__sim_failed__":
+            self._simulation_failed(item[1], item[2])
+        elif event == "__sim_prepared__":
+            self._simulation_prepared(item[1])
+        elif event == "__sim_launched__":
+            self._simulation_launched(item[1])
+        elif event == "__sim_launch_failed__":
+            self._simulation_launch_failed(item[1])
+        elif event == "__sim_confirmed__":
+            self._simulation_confirmed()
+        elif event == "__sim_confirm_failed__":
+            self._simulation_confirm_failed(item[1])
+        elif event == "__sim_cleaned__":
+            self._simulation_cleaned(item[1])
+
     def _drain(self):
         try:
             while True:
                 item = self.queue.get_nowait()
-                if isinstance(item, tuple):
-                    event = item[0]
-                    if event == "__scan_done__":
-                        self._scan_finished(*item[1:])
-                    elif event == "__done__":
-                        self._finish(item[1])
-                    elif event == "__sim_log__":
-                        self._log(str(item[1]))
-                    elif event == "__sim_stage__":
-                        self._set_sim_stage(item[1], item[2], item[3])
-                    elif event == "__sim_failed__":
-                        self._simulation_failed(item[1], item[2])
-                    elif event == "__sim_prepared__":
-                        self._simulation_prepared(item[1])
-                    elif event == "__sim_launched__":
-                        self._simulation_launched(item[1])
-                    elif event == "__sim_launch_failed__":
-                        self._simulation_launch_failed(item[1])
-                    elif event == "__sim_confirmed__":
-                        self._simulation_confirmed()
-                    elif event == "__sim_confirm_failed__":
-                        self._simulation_confirm_failed(item[1])
-                    elif event == "__sim_cleaned__":
-                        self._simulation_cleaned(item[1])
-                else:
-                    self._log(item)
+                try:
+                    self._handle_event(item)
+                except Exception as exc:  # noqa: BLE001 - never freeze the queue
+                    self._log("\n[界面事件处理失败] %s: %s\n"
+                              % (type(exc).__name__, exc))
+                    self.var_global_status.set("界面状态异常，详情见日志")
+                    if not self.sim_preparing:
+                        self.busy = False
+                    self._set_buttons()
         except queue.Empty:
             pass
         try:
@@ -1467,6 +1932,16 @@ class App(_OperationMixin):
             button.configure(state="normal" if enabled else "disabled")
         for row in self.rows.values():
             row.toggle.configure(state="normal" if not locked and row.supported else "disabled")
+        confirm_ready = bool(self.sim_session and self.sim_launched and not self.busy)
+        self.btn_sim_success.configure(state="normal" if confirm_ready else "disabled")
+        self.btn_sim_failure.configure(state="normal" if confirm_ready else "disabled")
+        self.btn_sim_gameplay.configure(
+            state="normal" if (confirm_ready and self.sim_confirmed
+                               and not self.sim_gameplay_confirmed) else "disabled")
+        self.btn_sim_finish.configure(
+            state="normal" if (self.sim_session and not self.busy) else "disabled")
+        self.btn_sim_cleanup.configure(
+            state="normal" if (self.sim_session and not self.busy) else "disabled")
         if self.busy:
             self.var_global_status.set("正在处理…")
             self.bar.grid()
@@ -1474,8 +1949,6 @@ class App(_OperationMixin):
         else:
             self.bar.stop()
             self.bar.grid_remove()
-        if self.sim_confirm_frame.winfo_manager() == "pack":
-            self.sim_confirm_frame.pack_configure(before=self.buttons)
         self._update_action_hint()
 
     def _show_log(self):
@@ -1555,12 +2028,18 @@ class App(_OperationMixin):
             messagebox.showerror(TITLE, "无法打开目录：%s" % exc)
 
     def copy_log(self):
-        text = self.log.get("1.0", "end-1c")
+        text = self._log_text()
+        if not text.strip():
+            self.var_global_status.set("日志为空")
+            return
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
         self.var_global_status.set("日志已复制")
 
     def export_log(self):
+        if not self._log_text().strip():
+            self.var_global_status.set("日志为空，没有可导出的内容")
+            return
         path = filedialog.asksaveasfilename(
             title="导出运行日志", defaultextension=".txt",
             filetypes=(("文本文件", "*.txt"), ("所有文件", "*.*")))
@@ -1568,19 +2047,29 @@ class App(_OperationMixin):
             return
         try:
             with open(path, "w", encoding="utf-8", newline="\n") as stream:
-                stream.write(self.log.get("1.0", "end-1c"))
+                stream.write(self._log_text())
             self.var_global_status.set("日志已导出")
         except OSError as exc:
             messagebox.showerror(TITLE, "导出失败：%s" % exc)
 
     def clear_log(self):
+        if not self._log_text().strip():
+            self.var_global_status.set("日志已经为空")
+            return
+        if not messagebox.askyesno(
+                TITLE, "清空运行日志？\n\n清空后无法从界面恢复；"
+                       "需要保留时请先“导出…”。"):
+            return
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")
         self.log.configure(state="disabled")
+        self._update_log_actions()
+        self.var_global_status.set("日志已清空")
 
     def _schedule_geometry_save(self, event=None):
         if event is not None and getattr(event, "widget", None) is not self.root:
             return
+        self._apply_responsive()
         if self._geometry_job is not None:
             try:
                 self.root.after_cancel(self._geometry_job)
@@ -1588,10 +2077,21 @@ class App(_OperationMixin):
                 pass
         self._geometry_job = self.root.after(700, self._save_geometry)
 
+    def _window_scaling(self):
+        try:
+            return max(1.0, float(self.root._get_window_scaling()))
+        except Exception:  # noqa: BLE001 - cosmetic value only
+            return 1.0
+
     def _save_geometry(self):
         self._geometry_job = None
         try:
-            width, height = self.root.winfo_width(), self.root.winfo_height()
+            # CTk geometry is expressed in logical pixels but winfo_* reports
+            # physical pixels.  Saving the physical value made the window grow
+            # by the DPI factor on every restart.
+            scale = self._window_scaling()
+            width = int(round(self.root.winfo_width() / scale))
+            height = int(round(self.root.winfo_height() / scale))
             if width >= 900 and height >= 620:
                 self.state["window"] = {"width": width, "height": height}
                 if hasattr(self, "var_window"):
@@ -1613,6 +2113,14 @@ class App(_OperationMixin):
             except tk.TclError:
                 pass
             self._geometry_job = None
+        # Cancel the drain/wrap timers too.  A destroyed Tk interpreter that
+        # still has queued after-scripts leaves noisy "invalid command name"
+        # errors and can interfere with the next Tk root in the same process.
+        try:
+            for timer in self.root.tk.call("after", "info"):
+                self.root.tk.call("after", "cancel", timer)
+        except tk.TclError:
+            pass
         self._save_geometry()
         self.root.destroy()
 
@@ -1625,33 +2133,59 @@ class App(_OperationMixin):
         window.transient(self.root)
         window.resizable(False, False)
         frame = ctk.CTkFrame(window, fg_color="transparent")
-        frame.pack(fill="both", expand=True, padx=18, pady=16)
-        ctk.CTkLabel(frame, text="找到多个启动程序，请选择要测试的版本：",
-                     anchor="w", wraplength=400, font=self._font(10)).pack(
-                         anchor="w", pady=(0, 8))
+        frame.pack(fill="both", expand=True, padx=20, pady=18)
+        ctk.CTkLabel(
+            frame, text="找到多个启动程序，请选择要测试的版本：",
+            anchor="w", justify="left", wraplength=420,
+            text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["body"], "bold")).pack(
+                anchor="w", pady=(0, 10))
         selected = tk.StringVar(value=launchers[0])
+        radios = []
         for launcher in launchers:
             name = os.path.basename(str(launcher))
-            ctk.CTkRadioButton(frame, text=name, value=launcher, variable=selected,
-                               font=self._font(9)).pack(anchor="w", pady=2)
+            radio = ctk.CTkRadioButton(
+                frame, text=name, value=launcher, variable=selected,
+                text_color=_PAIR["fg"],
+                font=self._font(ui_tokens.FONT_ROLES["secondary"]))
+            radio.pack(anchor="w", pady=3)
+            radios.append(radio)
         buttons = ctk.CTkFrame(frame, fg_color="transparent")
-        buttons.pack(fill="x", pady=(12, 0))
+        buttons.pack(fill="x", pady=(14, 0))
         def choose():
             result["value"] = selected.get()
             window.destroy()
-        ctk.CTkButton(buttons, text="启动所选项", command=choose,
-                      fg_color=_PAIR["accent"], font=self._font(9)).pack(side="right")
-        ctk.CTkButton(buttons, text="取消", command=window.destroy,
-                      fg_color="transparent", border_width=1,
-                      border_color=_PAIR["border"], text_color=_PAIR["fg"],
-                      font=self._font(9)).pack(side="right", padx=(0, 7))
+        launch_button = ctk.CTkButton(
+            buttons, text="启动所选项", command=choose, height=34,
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color=_PAIR["accent_fill"], hover_color=_PAIR["accent_hover"],
+            text_color=_PAIR["on_accent"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"], "bold"))
+        launch_button.pack(side="right")
+        cancel_button = ctk.CTkButton(
+            buttons, text="取消", command=window.destroy, height=34,
+            corner_radius=ui_tokens.RADIUS["button"], fg_color="transparent",
+            border_width=1, border_color=_PAIR["border_strong"],
+            hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"]))
+        cancel_button.pack(side="right", padx=(0, 8))
+        for widget in radios + [launch_button, cancel_button]:
+            ui_focus.install(widget, _PAIR["focus"], _PAIR["border"])
+        window.bind("<Escape>", lambda _event: window.destroy())
         window.protocol("WM_DELETE_WINDOW", window.destroy)
         window.grab_set()
+        if radios:
+            window.after(50, lambda: ui_focus.focus_target(radios[0]).focus_set())
         self.root.wait_window(window)
         return result["value"]
 
 
 def main(initial_dir=None):
+    try:
+        import win_platform
+        win_platform.prepare_windows_process()
+    except Exception:  # noqa: BLE001 - a platform detail must not block the UI
+        pass
     state = app_state.load_state()
     ctk.set_default_color_theme("blue")
     ctk.set_appearance_mode(state.get("appearance", "system"))

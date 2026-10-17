@@ -10,6 +10,7 @@
 - 发布：`tools/build_provenance.py` 记录输入/产物哈希、Git 基准和构建状态；1.1.0 提供 onefile + onedir 两种形态，GitHub `v1.1.0` Release 已发布（tag 指向 `b0c7e43`），附 manifest、validation 和 SHA256SUMS。
 - 本机 1.1.0 源码闸门：136 passed、2 skipped、13 subtests passed；跳过项是可选真实引擎测试（本机样本未安装）和 Windows 符号链接权限。此前带本地样本时记录过 137 passed、1 skipped。
 - 已知限制：完整 NW.js 流程、真实 Luna 客户端长流程、所有回放场景、sample B 自定义画廊未完整验证；公开文档只用 sample A/B/C。
+- 界面测试版 1.1.5：token/对比度、键盘焦点、确认与空状态、游戏库离线保留、DPI/图标已完成；规则见 `docs/UI_SYSTEM.md`，审计见 `docs/UI_AUDIT.md`。1.2.0 正式版仍需完成适配器契约、事务恢复和字体子集化。
 
 ## 1. 1.2.0 推荐主线
 

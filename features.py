@@ -24,6 +24,7 @@ CATALOG = [
     {
         "id": "fontfix",
         "title": "汉化预飞（字体）",
+        "summary": "让游戏用到的每个字体名都能显示中文，不翻译文本。",
         # Broken by hand: Tk only wraps at a space or inside a single run that
         # overflows on its own, so a CJK sentence followed by a Latin word wraps
         # after the first word and leaves the rest of the line empty.
@@ -37,6 +38,7 @@ CATALOG = [
     {
         "id": "intro",
         "title": "跳过开场 logo",
+        "summary": "跳过开场 logo 直接进主菜单；可能影响游戏初始化，请先在副本验证。",
         "desc": "把游戏的 splashscreen 标签指向一个空实现，开局直接进主菜单，\n"
                 "可能跳过游戏初始化，请先在副本验证。会先备份游戏里原有的同名\n"
                 "覆盖文件，撤销时原样放回。",
@@ -47,6 +49,7 @@ CATALOG = [
     {
         "id": "runtime_compat",
         "title": "游戏入口 / 文本注入兼容",
+        "summary": "仅对已核实引擎提供可撤销的入口与文本注入兼容补丁。",
         "desc": "仅对检测通过的游戏提供可撤销的运行兼容补丁。\n"
                 "具体支持机制以预检结果为准；不会隐藏游戏异常。",
         "default_on": False,
@@ -56,6 +59,7 @@ CATALOG = [
     {
         "id": "gallery",
         "title": "解锁画廊 / 回放",
+        "summary": "只放开已核实的画廊与回放条件，不永久修改存档。",
         "desc": "在已验证的画廊机制中放开图片和回放访问限制。\n"
                 "不永久修改存档；撤销后恢复游戏原规则，新获得的正常进度保留。",
         "default_on": False,

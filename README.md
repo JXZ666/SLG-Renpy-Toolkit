@@ -1,6 +1,6 @@
 # SLG-Renpy神奇妙妙工具 · SLG-Renpy-Toolkit
 
-给游戏安装可选择、可撤销的小补丁。**1.1.0 默认只安装字体补丁**，跳过开场、运行兼容和画廊 / 回放需主动选择，并以目标游戏的预检范围为准。
+给游戏安装可选择、可撤销的小补丁。**1.1.5 是界面测试版，功能默认值与 1.1.0 相同：只安装字体补丁**，跳过开场、运行兼容和画廊 / 回放需主动选择，并以目标游戏的预检范围为准。
 
 | 功能 ID | 默认 | 当前范围 |
 |---|---|---|
@@ -100,19 +100,19 @@ python -m pip check
 build_exe.bat
 ```
 
-构建依赖固定在 `requirements-build.txt`；构建脚本校验版本，不自动升级。产物位于 `release\1.1.0\`，单文件 GUI / CLI 位于其 `onefile\` 子目录；onedir 版须连同 `_internal` 保留。需要指定形态时使用 `python tools/build_exe.py --mode onefile` 或 `--mode onedir`。
+构建依赖固定在 `requirements-build.txt`；构建脚本校验版本，不自动升级。产物位于 `release\1.1.5\`，单文件 GUI / CLI 位于其 `onefile\` 子目录；onedir 版须连同 `_internal` 保留。需要指定形态时使用 `python tools/build_exe.py --mode onefile` 或 `--mode onedir`。
 
-`build_manifest.json` 记录构建输入哈希、Git 基准、构建状态和产物哈希。构建期间输入变化、exe 过旧或哈希不匹配会使验证失败；显示 `1.1.0` 不能单独证明 exe 来自当前源码。
+`build_manifest.json` 记录构建输入哈希、Git 基准、构建状态和产物哈希。构建期间输入变化、exe 过旧或哈希不匹配会使验证失败；显示 `1.1.5` 不能单独证明 exe 来自当前源码。
 
 ## 验证边界
 
 Windows 为当前验证平台；Linux / macOS 未验证。静态预检不能替代菜单、存档、中文渲染与剧情场景测试。MV / MZ 已有脚本行为和字体回退验证，但完整 NW.js 游戏流程仍需单独验收。真实 Luna 客户端全流程、所有回放场景及其他自定义图鉴机制尚未完整实测。
 
-开发交接、历史事故和验证纪律见 [HANDOFF.md](HANDOFF.md)；本版变化见 [1.1.0 发布说明](release_notes/1.1.0.md)。
+开发交接、历史事故和验证纪律见 [HANDOFF.md](HANDOFF.md)；本版变化见 [1.1.5 测试版说明](release_notes/1.1.5-test.md)，界面规则见 [UI 审计](docs/UI_AUDIT.md) 与 [UI 系统](docs/UI_SYSTEM.md)。
 
 ## English
 
-Version 1.1.0 defaults to font fixes only. Opening-logo skipping, reviewed runtime compatibility and qualified gallery / replay access are optional. Ren'Py and RPG Maker MV / MZ are detected separately; MV / MZ currently implement font fallback only. Unknown gallery mechanisms remain unsupported, and partial adapters report their actual coverage.
+Version 1.1.5 is a UI test build with the same feature defaults as 1.1.0: font fixes only. Opening-logo skipping, reviewed runtime compatibility and qualified gallery / replay access are optional. Ren'Py and RPG Maker MV / MZ are detected separately; MV / MZ currently implement font fallback only. Unknown gallery mechanisms remain unsupported, and partial adapters report their actual coverage.
 
 Simulation installs into a temporary copy with isolated saves. Menu confirmation and gameplay confirmation are separate, and newly observed errors invalidate the test. Runtime qualification is not a promise that every scene or an external translation client has been tested. Changes are recorded for safe revert; ordinary gameplay progress is retained.
 

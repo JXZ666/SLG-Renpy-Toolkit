@@ -50,7 +50,8 @@ def verify(output):
             app.game_dir = str(game)
             support = {fid: {"supported": True, "reasons": ["Only recognized built-in gallery and replay conditions are bypassed; game-specific custom achievement, inventory and scripted unlock conditions remain unsupported."]}
                        for fid in features.ids()}
-            support["intro"] = {"supported": False, "reasons": ["Synthetic unsupported engine path; reason must remain readable."]}
+            support["intro"] = {"supported": False,
+                                "reasons": ["合成样本：此引擎路径仅用于布局验证。"]}
             app._apply_feature_support({"feature_support": support})
             root.deiconify()
             _pump(root)

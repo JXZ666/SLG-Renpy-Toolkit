@@ -435,8 +435,8 @@ def survey(game_dir, quick=False):
     # the redirect lands whether or not the game defines the label itself. It is
     # still worth saying, because "nothing happened" is the expected outcome.
     if not out["splash"]["found"]:
-        out["reasons"].append("在可读的脚本里没找到 `label splashscreen:`——"
-                              "跳过开场仍然会被安装，但可能本来就没有 logo 可跳。")
+        out["reasons"].append("在可读的脚本里没找到 `label splashscreen:`。"
+                              "跳过开场仍会被安装，但游戏可能本来就没有 logo 可跳。")
     return out
 
 
