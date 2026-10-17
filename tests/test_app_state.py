@@ -50,8 +50,24 @@ def test_settings_round_trip_atomically_and_sanitize_bounds(tmp_path):
     assert loaded["window"] == {"width": 2400, "height": 560}
     assert loaded["games"][0]["path"] == str(game.resolve())
     assert loaded["active_game"] == str(game.resolve())
-    assert json.loads(filename.read_text(encoding="utf-8"))["schema"] == 1
+    assert json.loads(filename.read_text(encoding="utf-8"))["schema"] == 2
     assert sorted(item.name for item in filename.parent.iterdir()) == ["ui_state.json"]
+
+
+def test_old_physical_window_size_is_migrated_once(tmp_path):
+    filename = tmp_path / "old.json"
+    filename.write_text(json.dumps({
+        "schema": 1,
+        "window": {"width": 1350, "height": 930},
+        "appearance": "light",
+    }), encoding="utf-8")
+    loaded = app_state.load_state(filename)
+    assert loaded["schema"] == 2
+    assert loaded["window"] == {"width": 1180, "height": 780}
+
+    app_state.save_state(loaded, filename)
+    again = app_state.load_state(filename)
+    assert again["window"] == {"width": 1180, "height": 780}
 
 
 def test_invalid_state_falls_back_and_removed_paths_do_not_remain_active(tmp_path):

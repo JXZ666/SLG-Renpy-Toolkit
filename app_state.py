@@ -12,7 +12,7 @@ import os
 import tempfile
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_WINDOW = {"width": 1180, "height": 780}
 APPEARANCES = {"system", "light", "dark"}
 
@@ -70,10 +70,17 @@ def _sanitize(raw):
         width, height = window.get("width"), window.get("height")
         if (isinstance(width, int) and not isinstance(width, bool)
                 and isinstance(height, int) and not isinstance(height, bool)):
-            state["window"] = {
-                "width": min(2400, max(760, width)),
-                "height": min(1800, max(560, height)),
-            }
+            # Schema 1 stored physical pixels.  On a 150% display that turns
+            # 900×620 into 1350×930 and the next launch grows again.  Migrate
+            # once to the safe default cap; schema 2 values are logical.
+            raw_schema = raw.get("schema", 1)
+            migrating = not isinstance(raw_schema, int) or raw_schema < 2
+            width = min(2400, max(760, width))
+            height = min(1800, max(560, height))
+            if migrating:
+                width = min(width, 1180)
+                height = min(height, 780)
+            state["window"] = {"width": width, "height": height}
 
     games = raw.get("games")
     if isinstance(games, list):

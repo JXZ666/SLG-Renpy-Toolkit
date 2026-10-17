@@ -8,7 +8,7 @@
 - 新模块：`ui_tokens.py`（颜色/字体/间距/对比度审计）、`ui_text.py`（英文 reason 中文化）、`ui_focus.py`（Tab/焦点环/键盘激活）、`win_platform.py`（DPI awareness + AppUserModelID）。
 - 界面：处理页常驻底栏；游戏库与离线条目、日志空状态、安装/撤销/清空确认、模拟清理重试、未知支持 fail-closed。
 - 文档：`docs/UI_AUDIT.md`、`docs/UI_SYSTEM.md`；截图工具 `tools/capture_ui_states.py`。
-- 验证：`python -m pytest -q` → 256 passed、2 skipped、13 subtests passed；`python tools/check_privacy.py` clean。跳过项仍是可选真实引擎 fixture 与 Windows 符号链接权限。
+- 验证：`python -m pytest -q` → 257 passed、2 skipped、13 subtests passed；`python tools/check_privacy.py` clean。跳过项仍是可选真实引擎 fixture 与 Windows 符号链接权限。
 - 边界：不新增引擎、不改安装事务、不重做 IA/品牌；Tk 屏幕阅读器支持仍有限。
 
 ## 1.1.0 当前交接（2026-10-17）
