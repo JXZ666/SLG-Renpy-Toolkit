@@ -17,6 +17,7 @@
 - **模拟验证**：启动前记录诊断基线，只把新增 / 变化错误归入本轮；主菜单与游玩确认独立，进程未出现错误不自动计为成功。普通存档与 multipersistent 均隔离。对已安装样本复制时，必须同时迁移并校验所属账本 / 备份，不能借模拟绕过所有权检查。
 - **发布构建**：1.1.0 保留单文件 GUI / CLI 与 onedir 形态，`tools/build_provenance.py` 写 `build_manifest.json`。输入哈希、基准提交、构建状态和产物哈希须一致，构建中源码变化必须判失败。只看 exe 版本资源或 mtime 不够；源码测试与真实 exe 副本测试分别记录。
 - **隐私清洗**：公开源码中的真实游戏缩写 / 真实 label 已移除，文档统一 sample A / B / C；`tools/verify_game_copies.py --kind replay` 的原生入口标签改由调用者 `--label` 传入。
+- **发布状态（2026-10-17）**：GitHub `v1.1.0` Release 已发布（https://github.com/JXZ666/SLG-Renpy-Toolkit/releases/tag/v1.1.0），tag 指向 `b0c7e43`。资产包含 onefile GUI / CLI、两个 `-win64.zip` onedir 包、`build_manifest.json`、`validation_report.json`、`SHA256SUMS.txt`；`source.dirty=false`，provenance 校验通过。源码闸门 136 passed / 2 skipped / 13 subtests。下一版方向见 `ROADMAP.md`。
 
 ### 1.1.0 验证交接要求
 
