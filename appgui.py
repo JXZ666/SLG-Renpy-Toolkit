@@ -22,6 +22,7 @@ import cmd_fontfix
 import compat
 import features
 import simulation
+import engine_adapters
 
 TITLE = branding.APP_NAME
 
@@ -70,7 +71,7 @@ class _Sink:
         pass
 
 
-def _namespace(game_dir, revert=False, dry_run=False, force=False, skip_intro=True,
+def _namespace(game_dir, revert=False, dry_run=False, force=False, skip_intro=None,
                feature_ids=None):
     """The argument set cmd_fontfix.run() expects.
 
@@ -87,12 +88,15 @@ def _namespace(game_dir, revert=False, dry_run=False, force=False, skip_intro=Tr
     """
     if feature_ids is None:
         feature_ids = features.default_selection()
-    if not skip_intro:
+    feature_ids = list(feature_ids)
+    if skip_intro is True and "intro" not in feature_ids:
+        feature_ids.append("intro")
+    elif skip_intro is False:
         feature_ids = [f for f in feature_ids if f != "intro"]
     return argparse.Namespace(
         game_dir=game_dir, work=None, mode="luna",
         lang="chinesesimplified", revert=revert, force=force, dry_run=dry_run,
-        features=list(feature_ids), skip_intro=skip_intro)
+        features=list(feature_ids), skip_intro="intro" in feature_ids)
 
 
 def _system_theme():
@@ -139,6 +143,10 @@ def _chip(entry, state):
 
 def _describe(s):
     """One line naming what kind of game this folder holds."""
+    engine = s.get("engine", {})
+    if engine.get("id") and engine["id"] != "renpy":
+        name = {"rpgmaker_mv": "RPG Maker MV", "rpgmaker_mz": "RPG Maker MZ"}.get(engine["id"], "未知引擎")
+        return s["label"] + " · " + name + " " + (engine.get("version") or "版本未知")
     r = s["renpy"]
     py = s["python"]["major"]
     src = s["sources"]
@@ -187,6 +195,7 @@ class _OperationMixin:
         "install": "\u6a21\u62df\u5b89\u88c5\u8865\u4e01",
         "launch": "\u542f\u52a8\u526f\u672c",
         "confirm": "\u786e\u8ba4\u4e3b\u83dc\u5355",
+        "gameplay": "剧情场景验证",
     }
 
     _SIM_STAGE_DEFAULTS = {
@@ -195,6 +204,7 @@ class _OperationMixin:
         "install": "\u7b49\u5f85\u6a21\u62df\u5b89\u88c5",
         "launch": "\u5c1a\u672a\u542f\u52a8",
         "confirm": "\u7b49\u5f85\u542f\u52a8\u9a8c\u8bc1",
+        "gameplay": "尚未验证",
     }
 
 
@@ -219,7 +229,7 @@ class _OperationMixin:
             messagebox.showinfo(
                 TITLE, "\u8bf7\u5148\u52fe\u9009\u81f3\u5c11\u4e00\u4e2a\u53ef\u7528\u529f\u80fd\u3002")
             return
-        if not self.game_dir or not os.path.isdir(os.path.join(self.game_dir, "game")):
+        if not self.game_dir or engine_adapters.detect(self.game_dir)["id"] in ("unknown", "ambiguous"):
             self._set_sim_result("bad", "\u8bf7\u5148\u9009\u62e9\u6709\u6548\u7684\u6e38\u620f\u6839\u76ee\u5f55\u3002")
             return
 
@@ -236,7 +246,7 @@ class _OperationMixin:
 
     def _simulation_prepare_worker(self, game_dir, feature_ids):
         try:
-            survey = compat.survey(game_dir, quick=True)
+            survey = engine_adapters.survey(game_dir, quick=True)
             support_map = survey.get("feature_support", {}) if isinstance(survey, dict) else {}
             unsupported = []
             if isinstance(support_map, dict):
@@ -365,11 +375,23 @@ class _OperationMixin:
         except Exception as exc:  # noqa: BLE001
             self._simulation_launch_failed("%s: %s" % (type(exc).__name__, exc))
             return
+        runtime_errors = getattr(session, "runtime_errors", [])
+        if runtime_errors:
+            self._set_sim_stage("launch", "failed", runtime_errors[-1])
+            self._set_sim_result("bad", "游戏报告了新异常：" + runtime_errors[-1])
+            self._show_log()
+            self.sim_confirm_frame.pack_forget()
+            if code is None:
+                self.root.after(400, self._poll_simulation)
+            else:
+                self.sim_process_exited = True
+                self._cleanup_simulation(stop=False)
+            return
         if code is None:
             self.root.after(400, self._poll_simulation)
             return
         self.sim_process_exited = True
-        if code != 0 and not self.sim_confirmed:
+        if code != 0:
             message = "\u6e38\u620f\u8fdb\u7a0b\u5f02\u5e38\u9000\u51fa\uff0c\u9000\u51fa\u7801 %s" % code
             self._set_sim_stage("launch", "failed", message)
             self._set_sim_result("bad", "\u542f\u52a8\u5931\u8d25\uff1a" + message)
@@ -415,7 +437,9 @@ class _OperationMixin:
                             "\u7528\u6237\u5df2\u786e\u8ba4\u770b\u5230\u4e3b\u83dc\u5355")
         self._set_sim_result(
             "ok", "\u8fd0\u884c\u9a8c\u8bc1\u6210\u529f\uff1a\u4f60\u5df2\u786e\u8ba4\u8fdb\u5165\u4e3b\u83dc\u5355\u3002\u5173\u95ed\u6e38\u620f\u540e\u4f1a\u81ea\u52a8\u6e05\u7406\u9694\u79bb\u526f\u672c\u3002")
-        self.sim_confirm_frame.pack_forget()
+        self.btn_sim_gameplay.configure(state="normal")
+        self._set_sim_stage("gameplay", "pending", "尚未确认新游戏、原报错场景和读档")
+        self._set_sim_result("warn", "主菜单已确认；剧情和露娜组合尚未验证。继续在副本中测试后确认剧情结果。")
         self._set_buttons()
         if self.close_after_cleanup:
             self._cleanup_simulation(stop=True, close_after=True)
@@ -427,6 +451,21 @@ class _OperationMixin:
             self._cleanup_simulation(stop=False)
         else:
             self._poll_simulation()
+
+    def confirm_simulation_gameplay(self):
+        session = self.sim_session
+        if session is None or not self.sim_confirmed:
+            return
+        try:
+            session.confirm_gameplay()
+        except Exception as exc:
+            self._set_sim_stage("gameplay", "failed", str(exc))
+            self._set_sim_result("bad", "剧情确认失败：" + str(exc))
+            self._show_log()
+            return
+        self._set_sim_stage("gameplay", "success", "用户确认已测试的剧情场景正常")
+        self._set_sim_result("ok", "主菜单与本次测试的剧情场景已确认；关闭游戏后清理副本。")
+        self.btn_sim_gameplay.configure(state="disabled")
 
     def _simulation_confirm_failed(self, message):
         self.busy = False
@@ -541,7 +580,7 @@ class _OperationMixin:
             text = "\u6267\u884c\u8303\u56f4\uff1a" + "\u3001".join(selected)
         elif not self.game_dir:
             text = "\u5148\u9009\u62e9\u6e38\u620f\u76ee\u5f55\uff0c\u518d\u52fe\u9009\u8981\u5904\u7406\u7684\u529f\u80fd\u3002"
-        elif not os.path.isdir(os.path.join(self.game_dir, "game")):
+        elif engine_adapters.detect(self.game_dir)["id"] in ("unknown", "ambiguous"):
             text = "\u6240\u9009\u76ee\u5f55\u6ca1\u6709 game/\uff0c\u8bf7\u9009\u6709\u6548\u7684\u6e38\u620f\u6839\u76ee\u5f55\u3002"
         elif not any(row.supported for row in self.rows.values()):
             text = "\u5f53\u524d\u6e38\u620f\u6ca1\u6709\u53ef\u7528\u529f\u80fd\uff0c\u8bf7\u67e5\u770b\u529f\u80fd\u5361\u7247\u4e2d\u7684\u517c\u5bb9\u539f\u56e0\u3002"
@@ -577,15 +616,20 @@ class _OperationMixin:
                 reasons = [reasons]
             detail = "\uff1b".join(str(reason) for reason in reasons if reason)
             if row.supported:
-                row.reason_var.set("")
-                row.reason_label.pack_forget()
+                row.reason_label.configure(text_color=_PAIR["dim"])
+                row.reason_var.set("适配范围：" + detail if detail else "")
+                if detail:
+                    row.reason_label.pack(fill="x", padx=12, pady=(7, 12))
+                else:
+                    row.reason_label.pack_forget()
             else:
+                row.reason_label.configure(text_color=_PAIR["bad"])
                 self.var_on[fid].set(False)
                 reason = "\u5f53\u524d\u6e38\u620f\u4e0d\u652f\u6301\u6b64\u529f\u80fd"
                 if detail:
                     reason += "\uff1a" + detail
                 row.reason_var.set(reason)
-                row.reason_label.pack(anchor="w", pady=(7, 0))
+                row.reason_label.pack(fill="x", padx=12, pady=(7, 12))
         self._apply_wrap()
         if self.action_buttons:
             self._set_buttons()
@@ -623,8 +667,8 @@ class _OperationMixin:
     def _confirm_overwrite(self):
         """Only asked when a foreign file is in the way, so the normal
         reinstall path stays a single click."""
-        st = cmd_fontfix.installed_state(self.game_dir)
-        if st["shim"] and not st["ours"]:
+        st = engine_adapters.installed_state(self.game_dir)
+        if engine_adapters.detect(self.game_dir)["id"] == "renpy" and st.get("shim") and not st.get("ours"):
             return messagebox.askyesno(
                 TITLE,
                 "这个游戏里已经有一个 %s，但它不是本工具写的。\n\n"
@@ -659,7 +703,7 @@ class _OperationMixin:
         sys.stdout = sys.stderr = _Sink(self.queue)
         code = 0
         try:
-            code = cmd_fontfix.run(argv) or 0
+            code = engine_adapters.run(argv) or 0
         except SystemExit as e:
             print("!! %s" % e)
             code = 1
@@ -872,7 +916,7 @@ class App(_OperationMixin):
         card, inner = self._card(page)
         ctk.CTkLabel(inner, text="选择游戏", anchor="w", text_color=_PAIR["fg"],
                      font=self._font(13, "bold")).pack(anchor="w")
-        ctk.CTkLabel(inner, text="请选择包含 game/ 子目录的 Ren'Py 游戏根目录。",
+        ctk.CTkLabel(inner, text="请选择 Ren'Py 或 RPG Maker MV/MZ 的游戏根目录；工具会检查引擎和各项功能的适配范围。",
                      anchor="w", text_color=_PAIR["dim"], font=self._font(10)).pack(
                          anchor="w", pady=(4, 9))
         row = ctk.CTkFrame(inner, fg_color="transparent")
@@ -925,7 +969,8 @@ class App(_OperationMixin):
             desc_lines = sum(max(1, (len(line) + 46) // 47)
                              for line in desc.splitlines()) or 1
             feature_card.configure(height=max(116, 62 + 16 * desc_lines))
-            feature_card.pack_propagate(False)
+            feature_card.pack_propagate(True)
+            feature_card.bind("<Configure>", lambda event: self.root.after_idle(self._apply_wrap), add="+")
             feature_card.grid(row=i // 2, column=i % 2, sticky="nsew",
                               padx=(0, 6) if i % 2 == 0 else (6, 0), pady=6)
             head = ctk.CTkFrame(feature_card, fg_color="transparent")
@@ -960,8 +1005,9 @@ class App(_OperationMixin):
         ctk.CTkLabel(body, text="执行", anchor="w", text_color=_PAIR["fg"],
                      font=self._font(13, "bold")).pack(anchor="w")
         ctk.CTkLabel(body, text="模拟过程和结果确认都只作用于隔离副本，不会写入原游戏。只有单独点击“开始处理”才会修改原游戏。",
-                     anchor="w", text_color=_PAIR["dim"], font=self._font(9)).pack(
-                         anchor="w", pady=(4, 9))
+                     anchor="w", justify="left", wraplength=730,
+                     text_color=_PAIR["dim"], font=self._font(9)).pack(
+                         fill="x", pady=(4, 9))
         self.sim_result_var = tk.StringVar(value="尚未运行模拟安装。")
         self.sim_result_label = ctk.CTkLabel(
             body, textvariable=self.sim_result_var, anchor="w", justify="left",
@@ -979,6 +1025,11 @@ class App(_OperationMixin):
             font=self._font(9), command=self.confirm_simulation_failure)
         self.btn_sim_success.pack(side="left")
         self.btn_sim_failure.pack(side="left", padx=(7, 0))
+        self.btn_sim_gameplay = ctk.CTkButton(
+            self.sim_confirm_frame, text="已测试剧情 / 读档", height=30,
+            fg_color=_PAIR["accent"], hover_color=_PAIR["accent_hover"],
+            font=self._font(9), state="disabled", command=self.confirm_simulation_gameplay)
+        self.btn_sim_gameplay.pack(side="left", padx=(7, 0))
         self.sim_confirm_frame.pack_forget()
         self.buttons = ctk.CTkFrame(body, fg_color="transparent")
         buttons = self.buttons
@@ -1020,7 +1071,7 @@ class App(_OperationMixin):
                          anchor="w", pady=(3, 7))
         for key, name in (("compat", "兼容预检"), ("copy", "准备隔离副本"),
                           ("install", "模拟安装补丁"), ("launch", "启动副本"),
-                          ("confirm", "确认主菜单")):
+                          ("confirm", "确认主菜单"), ("gameplay", "剧情场景验证")):
             var = tk.StringVar(value=name + "：等待")
             label = ctk.CTkLabel(sim_body, textvariable=var, anchor="w",
                                  text_color=_PAIR["dim"], font=self._font(9))
@@ -1212,10 +1263,30 @@ class App(_OperationMixin):
         self._apply_theme(self.theme_modes.get(label, "system"))
 
     def _apply_wrap(self):
-        return None
+        # CTk reports physical widget widths but takes logical wrap lengths.
+        # Let packed labels determine each card's height so long supported or
+        # partial-support reasons remain readable in the scrollable page.
+        if not hasattr(self, "pages"):
+            return
+        pending = [self.pages["process"]]
+        while pending:
+            widget = pending.pop()
+            pending.extend(widget.winfo_children())
+            if not isinstance(widget, ctk.CTkLabel) or not widget.cget("wraplength"):
+                continue
+            parent = widget.master
+            width = parent.winfo_width()
+            if width <= 1:
+                continue
+            scaling = parent._get_widget_scaling() if hasattr(parent, "_get_widget_scaling") else 1
+            wrap = max(160, int(width / scaling) - 28)
+            if widget.cget("wraplength") != wrap:
+                widget.configure(wraplength=wrap)
 
     def _reset_simulation_status(self):
         self.sim_stage_state = {}
+        if hasattr(self, "btn_sim_gameplay"):
+            self.btn_sim_gameplay.configure(state="disabled")
         for key, text in self._SIM_STAGE_DEFAULTS.items():
             self._set_sim_stage(key, "pending", text)
         self._set_sim_result("info", "尚未运行模拟安装。将在隔离副本中测试，不会修改原游戏。")
@@ -1292,26 +1363,26 @@ class App(_OperationMixin):
             self.var_toolbox_info.set("尚未选择游戏。")
             self.var_toolbox_installed.set("")
             return self._set_state("info", "先选择一个游戏目录。")
-        if not os.path.isdir(os.path.join(path, "game")):
+        if engine_adapters.detect(path)["id"] in ("unknown", "ambiguous"):
             self.scan_busy = False
             self._survey = self._installed = None
             self._set_compat(None)
             self._apply_feature_support(None)
             self._paint_chips(None)
-            self.var_toolbox_info.set("目录中没有 game/ 子目录。")
+            self.var_toolbox_info.set("目录中未找到支持的游戏引擎。")
             self.var_toolbox_installed.set("")
-            return self._set_state("bad", "所选目录没有 game/ 子目录，请选择 Ren'Py 游戏根目录。")
+            return self._set_state("bad", "请选择 Ren’Py 或 RPG Maker MV/MZ 游戏根目录。")
         self.scan_busy = True
         self.var_global_status.set("正在检查游戏…")
-        self._set_state("warn", "正在检查 Ren'Py 版本、功能 API 和已安装补丁…")
+        self._set_state("warn", "正在检查游戏引擎、功能支持和已安装补丁…")
         self._set_buttons()
         threading.Thread(target=self._scan_worker, args=(path, generation), daemon=True).start()
         return "warn", "正在检查游戏。"
 
     def _scan_worker(self, path, generation):
         try:
-            survey = compat.survey(path, quick=True)
-            installed = cmd_fontfix.installed_state(path)
+            survey = engine_adapters.survey(path, quick=True)
+            installed = engine_adapters.installed_state(path)
             self.queue.put(("__scan_done__", generation, path, survey, installed, None))
         except Exception as exc:
             self.queue.put(("__scan_done__", generation, path, None, None,
@@ -1385,7 +1456,7 @@ class App(_OperationMixin):
             pass
 
     def _set_buttons(self):
-        valid = bool(self.game_dir and os.path.isdir(os.path.join(self.game_dir, "game")))
+        valid = bool(self.game_dir and engine_adapters.detect(self.game_dir)["id"] not in ("unknown", "ambiguous"))
         locked = self.busy or self.sim_preparing or self.sim_session is not None
         selected = bool(self._ticked())
         can_work = valid and selected and not locked and not self.scan_busy
@@ -1412,14 +1483,14 @@ class App(_OperationMixin):
         self._show_page("log")
 
     def pick(self):
-        chosen = filedialog.askdirectory(title="选择 Ren'Py 游戏根目录")
+        chosen = filedialog.askdirectory(title="选择游戏根目录")
         if chosen:
             self.set_game_dir(chosen)
 
     def set_game_dir(self, game_dir, remember=True):
         self.game_dir = os.path.abspath(os.fspath(game_dir)) if game_dir else None
         self.var_dir.set(self.game_dir or "")
-        if self.game_dir and remember and os.path.isdir(os.path.join(self.game_dir, "game")):
+        if self.game_dir and remember and engine_adapters.detect(self.game_dir)["id"] not in ("unknown", "ambiguous"):
             try:
                 self.state = app_state.add_game(self.state, self.game_dir)
                 self._persist_state()
@@ -1432,7 +1503,7 @@ class App(_OperationMixin):
         self._set_buttons()
 
     def add_game(self):
-        chosen = filedialog.askdirectory(title="添加 Ren'Py 游戏根目录")
+        chosen = filedialog.askdirectory(title="添加游戏根目录")
         if not chosen:
             return
         try:

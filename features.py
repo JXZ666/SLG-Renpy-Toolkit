@@ -38,11 +38,29 @@ CATALOG = [
         "id": "intro",
         "title": "跳过开场 logo",
         "desc": "把游戏的 splashscreen 标签指向一个空实现，开局直接进主菜单，\n"
-                "不必每次启动都看一遍厂商 logo。会先备份游戏里原有的同名覆盖文件，\n"
-                "撤销时原样放回。",
-        "default_on": True,
+                "可能跳过游戏初始化，请先在副本验证。会先备份游戏里原有的同名\n"
+                "覆盖文件，撤销时原样放回。",
+        "default_on": False,
         "state": {"installed": "intro", "ours": "intro_ours",
                   "current": "intro_current"},
+    },
+    {
+        "id": "runtime_compat",
+        "title": "游戏入口 / 文本注入兼容",
+        "desc": "仅对检测通过的游戏提供可撤销的运行兼容补丁。\n"
+                "具体支持机制以预检结果为准；不会隐藏游戏异常。",
+        "default_on": False,
+        "state": {"installed": "runtime_compat", "ours": "runtime_compat_ours",
+                  "current": "runtime_compat_current"},
+    },
+    {
+        "id": "gallery",
+        "title": "解锁画廊 / 回放",
+        "desc": "在已验证的画廊机制中放开图片和回放访问限制。\n"
+                "不永久修改存档；撤销后恢复游戏原规则，新获得的正常进度保留。",
+        "default_on": False,
+        "state": {"installed": "gallery", "ours": "gallery_ours",
+                  "current": "gallery_current"},
     },
 ]
 
@@ -86,8 +104,8 @@ def selected(args):
     """
     chosen = getattr(args, "features", None)
     if chosen is None:
-        chosen = ["fontfix"]
-        if getattr(args, "skip_intro", True):
+        chosen = default_selection()
+        if getattr(args, "skip_intro", False):
             chosen.append("intro")
     known = set(ids())
     return [fid for fid in ids() if fid in chosen and fid in known]

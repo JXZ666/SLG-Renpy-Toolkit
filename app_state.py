@@ -51,8 +51,9 @@ def validate_game_path(path):
     normalized = os.path.realpath(os.path.abspath(os.fspath(path)))
     if not os.path.isdir(normalized):
         raise ValueError("游戏目录不存在或不可访问。")
-    if not os.path.isdir(os.path.join(normalized, "game")):
-        raise ValueError("所选目录中没有 game/ 子目录，请选择 Ren'Py 游戏根目录。")
+    import engine_adapters
+    if engine_adapters.detect(normalized)["id"] in ("unknown", "ambiguous"):
+        raise ValueError("请选择可识别的 Ren'Py 或 RPG Maker MV/MZ 游戏根目录。")
     return normalized
 
 

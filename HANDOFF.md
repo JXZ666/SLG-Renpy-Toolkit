@@ -2,6 +2,31 @@
 
 面向**接手本项目的人或 AI**。用户向文档见 `README.md`；本文讲的是内部结构、坑和纪律。
 
+## 1.1.0 当前交接（2026-10-17）
+
+下面的 1.0.0 快照保留作历史记录。当前版本以 `branding.APP_VERSION` 为准，本文历史行号、测试数量和双功能描述不能作为 1.1.0 实现依据。
+
+- **默认与接口**：四个独立功能 `fontfix`、`intro`、`runtime_compat`、`gallery`，默认只有字体开启。GUI / CLI 都走功能目录；保留 `--no-skip-intro`，新增主动加入的 `--skip-intro`，`--features intro` 是有效显式选择。升级不自动删除旧补丁。
+- **跨引擎路由**：`engine_adapters.py` 识别 Ren'Py 与 RPG Maker MV / MZ，未知或歧义根目录拒绝安装。MV / MZ 当前只提供字体回退；`rpgmaker.py` 安装字体 / 插件并修改数据型 `plugins.js`，必须备份注册文件。`patch_transaction.py` 管理该引擎的所有权、哈希检查和失败回滚，撤销要恢复原注册而不只是删除插件文件。
+- **Ren'Py 扩展**：`cmd_fontfix` 动态接入 addon 的 survey / render / REL；prepare 全通过后才 apply 的事务纪律保留。`renpy_compat.py` 提供 `custom_start_fallback` 与 `luna_say_bridge`：缺少标准入口时恢复已匹配的原入口，对控制 / 格式 tags 改变拒绝套用桥接，不能用宽泛 try/except 隐藏原始异常。
+- **画廊实现**：`renpy_gallery.py` 静态检查可见声明、资源和已审查引擎哈希，不执行游戏源码、不读取 pickle。标准 Gallery 只修改指定实例的 button / image conditions，载入存档后重新应用。游戏专用回放适配还锁定内容指纹，检查 label、缩略图和默认变量作用域；局部生成回放屏幕，以 `locked=False` 创建真实 Replay 动作。
+- **画廊边界**：sample A 的两张图片占位资源缺失，支持范围是 partial / replay-only；图片画廊不改。sample B 经隔离运行发现标准 Gallery 只有 2 张对象本身无条件的图片，另有 59 条自定义场景；画廊屏幕仍含 `persistent.gallery_unlocked`、`renpy.seen_label` / `seen_image` 门槛。解除标准 Gallery 条件不能解除这些 screen 门槛。原 screen 解锁按钮有 SetField 写入、回放 label 另加后缀，局部代理的动作和完整作用域尚未验证，标为不支持。禁止给这两项写“已全图鉴解锁”。卸载恢复访问规则，但游戏自然取得的已看状态保留，不回滚玩家存档。
+- **真实探针**：`tools/probe_gallery.py` 通过 `simulation.prepare/launch` 在完整副本内检查真实 Replay 资格、作用域及 seen 状态；sample A 源码启动探针得到 46 个资格通过、34 个默认变量、seen 状态未变。报告明确 `scene_playback_tested=False`，该结果不能冒充 46 个场景播放验收。
+- **入口 / 注入实测**：`tools/verify_game_copies.py` 在 sample A 副本复现缺少 `start`，补丁后查询解析到原有入口对象（`--kind replay` 的 `--label` 由调用者传入，仓库不写真实 label）。sample B 副本使用官方 hook 形态的离线 mock 复现相同内容的对白对象过期错误；桥接后通过实际交互、自动推进、slow 分支和开发模式检查，进程正常退出。它是离线注入形态实验，真实 Luna 客户端联网、长流程和旧存档仍未实测。
+- **自定义画廊研究**：`tools/inspect_gallery_copy.py` 让副本自己的引擎加载正常脚本后，记录标准 Gallery 对象、条件类型、screen 条件计数、persistent 字段名及自定义容器计数。报告不含剧情文本、persistent 值；宿主不反序列化外来脚本。sample B 的上述 2 / 59 与锁字段来自此真实探针，并以编译文件字节哈希识别为已调查但未适配机制。
+- **模拟验证**：启动前记录诊断基线，只把新增 / 变化错误归入本轮；主菜单与游玩确认独立，进程未出现错误不自动计为成功。普通存档与 multipersistent 均隔离。对已安装样本复制时，必须同时迁移并校验所属账本 / 备份，不能借模拟绕过所有权检查。
+- **发布构建**：1.1.0 保留单文件 GUI / CLI 与 onedir 形态，`tools/build_provenance.py` 写 `build_manifest.json`。输入哈希、基准提交、构建状态和产物哈希须一致，构建中源码变化必须判失败。只看 exe 版本资源或 mtime 不够；源码测试与真实 exe 副本测试分别记录。
+- **隐私清洗**：公开源码中的真实游戏缩写 / 真实 label 已移除，文档统一 sample A / B / C；`tools/verify_game_copies.py --kind replay` 的原生入口标签改由调用者 `--label` 传入。
+
+### 1.1.0 验证交接要求
+
+1. 运行完整 `python -m pytest tests -q`，同时运行历史脚本套件包装闸门。本次本机复跑记录为 136 passed、2 skipped、13 subtests passed：一项是可选真实引擎测试（本机样本未安装），一项是 Windows 符号链接权限；画廊模块 16 项通过、1 项可选跳过。此前配置已审查样本时记录过 137 passed、1 skipped；后续修改应重新运行并记录实际输出，不能沿用旧快照数字。
+2. 画廊关键测试包含内存变异：仅解按钮而保留图片条件、以及回放恢复 `locked=None` 都必须被断言抓到。可设置 `RPYKIT_GALLERY_GAME` 启用已审查本地引擎类测试；它只执行已核验的引擎类定义，真实游戏运行另在副本内完成。
+3. `python tools/check_privacy.py` 覆盖未跟踪新文件；公开文档 / 报告只用 sample A / B，不记录个人绝对路径、游戏目录或凭据。
+4. 本次发布目标为单文件 + onedir 双形态；构建完成后以 `build_manifest.json` 的 `status=complete`、`source.dirty=false`、输入 / 产物哈希一致为准，并附 `validation_report.json` / `SHA256SUMS.txt`。GUI exe 做隔离启动冒烟，CLI exe 做 `--version` 冒烟。1.1.0 构建前的真实样本记录（sample A / B 入口与离线 Luna、sample A 画廊 46 项资格与撤销、MV / MZ 最小 API 安装 / 重装 / 加载 / 撤销）保留在 `release_notes/1.1.0.md`；本次重建只做隐私标识重命名，未重复完整样本矩阵。完整 NW.js 流程、真实 Luna 客户端全流程和全场景回放尚未完整验证，继续明确保留这些边界。
+
+## 1.0.0 历史快照
+
 - 快照时间：2026-09-28
 - 版本：`branding.py:19` `APP_VERSION = "1.0.0"`（唯一版本来源）
 - 测试现状：`python -m pytest tests -q` → `58 passed, 13 subtests passed`，覆盖全部 10 个测试文件
@@ -87,7 +112,7 @@ GUI 的 `simulation.py` **不是假数据**：它把游戏整树复制到 `%TEMP
 
 ### 坑 1 ★ 发布包可能比源码旧 —— 本次真实事故
 
-用户报告游戏 `BecomeARockStar-1.01-pc`（Ren'Py **7.5.3 / Python 2.7**）**打不上补丁**。真实原因不是 bug 未修，而是**跑的 exe 太旧**：
+用户报告 sample C（Ren'Py **7.5.3 / Python 2.7**）**打不上补丁**。真实原因不是 bug 未修，而是**跑的 exe 太旧**：
 
 - `release/1.0.0/SLG-Renpy-Toolkit.exe` 构建于 **22:03**
 - 修复代码 `cmd_fontfix.py` 写于 **23:02**、`compat.py` **22:54**、`font_merge.py` **22:59**
@@ -191,7 +216,7 @@ build_exe.bat
 1. 两份测试都跑（见坑 2），全绿
 2. 构建，并确认产物 mtime **晚于所有源文件**
 3. **在产物 exe 上**实测，不是源码：
-   - 用 simulation 模式对 `BecomeARockStar-1.01-pc` 的副本安装
+   - 用 simulation 模式对 sample C 的副本安装
    - diff 产出的 `game/zz_localization.rpy` 与已知正确版本
    - 确认 `game/localization/rpykit-*.ttf` 合并字体存在
    - **启动游戏**，确认没有新的 `traceback.txt`、中文正常渲染

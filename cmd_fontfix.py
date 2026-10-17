@@ -590,8 +590,11 @@ def _resolve(ref, inventory):
     it just means the face cannot be measured, and an unmeasurable face is
     never delegated Latin.
     """
-    stem = os.path.splitext(fontscan.basename(ref))[0]
-    cands = [ref, fontscan.basename(ref)] + [stem + e for e in fontscan.FONT_EXTS]
+    ref = ref.replace("\\", "/")
+    stem = os.path.splitext(ref)[0]
+    cands = []
+    for spelling in [ref] + [stem + e for e in fontscan.FONT_EXTS]:
+        cands.extend([spelling, "fonts/" + spelling])
     for c in cands:
         entry = inventory.get(c)
         if entry is None:
@@ -599,7 +602,7 @@ def _resolve(ref, inventory):
                 if name.lower() == c.lower():
                     entry = e
                     break
-        if entry is not None:
+        if entry is not None and entry.get("loader_name", c).lower() == c.lower():
             data = fontscan.font_bytes(entry)
             if data:
                 return data, entry
@@ -638,7 +641,7 @@ def analyse(game_dir):
             # game's and aliasing it would compound on every reinstall.
             continue
         wanted.setdefault(name, "shipped file")
-        wanted.setdefault(_stem(name), "shipped file")
+        wanted.setdefault(os.path.splitext(name)[0], "shipped file")
 
     by_face = {}
     loose = []
@@ -650,7 +653,7 @@ def analyse(game_dir):
         if entry is None:
             loose.append((name, "face not found; cannot measure coverage", data))
             continue
-        canon = fontscan.basename(entry.get("path") or entry["entry"])
+        canon = entry.get("loader_name") or fontscan.basename(entry.get("path") or entry["entry"])
         rec = by_face.setdefault(canon, {
             "names": set(), "reasons": set(), "entry": entry, "data": data})
         rec["names"].add(name)
@@ -1347,6 +1350,53 @@ _FEATURES = {
 }
 
 
+def _addon_feature(fid, module_name):
+    """Use the existing prepare/apply transaction for optional runtime patches."""
+    def module():
+        return __import__(module_name)
+
+    def state(game_dir):
+        path = os.path.join(game_dir, "game", module().REL)
+        exists = os.path.isfile(path)
+        ours = exists and _is_ours(path)
+        current = False
+        if ours:
+            try:
+                current = _read_text(path) == module().render(game_dir)
+            except (ValueError, OSError, RuntimeError):
+                pass
+        return {fid: exists, fid + "_ours": ours, fid + "_current": current}
+
+    def targets(game_dir, ctx):
+        return ["game/" + module().REL]
+
+    def prepare(args, game_dir, work, ctx):
+        text = module().render(game_dir)
+        if MARKER not in text:
+            text = "# " + MARKER + "\n" + text
+        # Validation of game-specific semantics belongs to the adapter's survey.
+        if not text.strip() or "init " not in text:
+            raise FontFixError("invalid runtime patch: " + fid)
+        rel = "game/" + module().REL
+        if args.dry_run:
+            print("[S6] dry-run: would write %s (%s)" % (rel, fid))
+
+        def apply():
+            _write(_safe_join(game_dir, rel), text)
+            proj.record_file(work, game_dir, rel, "feature:" + fid)
+            print("[S6] wrote  : %s" % rel)
+        return {"problems": [], "apply": apply}
+
+    def undo(game_dir, work, manifest):
+        return _remove_owned(game_dir, work, manifest, "game/" + module().REL), []
+
+    return _Feature(fid, state, targets, prepare, undo)
+
+
+_FEATURES["runtime_compat"] = _addon_feature("runtime_compat", "renpy_compat")
+_FEATURES["gallery"] = _addon_feature("gallery", "renpy_gallery")
+
+
 def install(args, game_dir, work, ctx):
     """Run every selected feature, once every one of them has passed its check."""
     selected = features.selected(args)
@@ -1508,6 +1558,12 @@ def run(args):
         work = args.work or proj.work_dir_for(game_dir)
         manifest = proj.load_manifest(work)
         _check_manifest_game(game_dir, manifest)
+        if args.dry_run:
+            for entry in manifest["files"]:
+                print("[S6] dry-run: would inspect and revert " + entry["path"])
+            print("[S6] dry-run: revert preview only; no files changed")
+            args.outcome = "dry_run"
+            return 0
         revert(game_dir, work)
         args.outcome = "changed"
         return 0
@@ -1585,7 +1641,8 @@ def run(args):
     # The intro is worth installing on its own, so a game whose faces all
     # already cover Chinese still gets this far instead of bailing out. Bail
     # only when no selected feature has anything left to do.
-    if not (aliased and "fontfix" in selected) and "intro" not in selected:
+    if not (aliased and "fontfix" in selected) and not any(
+            fid != "fontfix" for fid in selected):
         print("[S6] every face already covers Chinese; nothing to do")
         args.outcome = "no_changes"
         return 0
@@ -1602,7 +1659,7 @@ def run(args):
     # every path before anything is written: the merged faces are named after
     # the game's own, and building the plan is what reads their bytes.
     legacy_plan = None
-    if mechanism == "font_replacement_map":
+    if mechanism == "font_replacement_map" and "fontfix" in selected:
         legacy_plan = _legacy_plan(decisions, report["inventory"])
 
     ctx = {"report": report, "decisions": decisions, "survey": survey,
@@ -1611,7 +1668,7 @@ def run(args):
     install(args, game_dir, work, ctx)
 
     if not args.dry_run:
-        proj.write_json(os.path.join(work, "fontfix_report.json"), {
+        final_report = {
             "game_dir": game_dir,
             "mode": args.mode,
             "installed": True,
@@ -1626,7 +1683,11 @@ def run(args):
             "compat": survey,
             "decisions": decisions,
             "refs": report["refs"],
-        })
+        }
+        try:
+            proj.write_json(os.path.join(work, "fontfix_report.json"), final_report)
+        except OSError as exc:
+            print("[S6] warning: patches installed, diagnostic report could not be saved: %s" % exc)
 
     print("[S6] OK - start the game to verify; `SLG-Renpy-Toolkit --revert` undoes it")
     args.outcome = "dry_run" if args.dry_run else "changed"

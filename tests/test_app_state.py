@@ -22,7 +22,7 @@ def test_add_game_requires_a_game_directory_and_never_scans_it(tmp_path):
     assert state["games"] == [{"path": str(game.resolve()), "name": "Example"}]
     assert state["active_game"] == str(game.resolve())
     assert {child.name for child in game.iterdir()} == {"game", "renpy"}
-    with pytest.raises(ValueError, match="game/"):
+    with pytest.raises(ValueError, match="Ren.*Py"):
         app_state.add_game(state, tmp_path)
 
 

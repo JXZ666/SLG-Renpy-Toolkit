@@ -17,7 +17,7 @@ a = Analysis(
     # does not find them; the whole package is 4.4 MB, which is cheaper than
     # guessing which submodules the merge path touches.
     hiddenimports=(collect_submodules('customtkinter')
-                   + collect_submodules('fontTools')),
+                   + collect_submodules('fontTools') + ['renpy_compat', 'renpy_gallery']),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

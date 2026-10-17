@@ -46,6 +46,7 @@ import argparse  # noqa: E402
 import branding  # noqa: E402
 import cmd_fontfix  # noqa: E402
 import features  # noqa: E402
+import engine_adapters  # noqa: E402
 
 
 def _split(value):
@@ -70,7 +71,9 @@ def _selection(args):
         chosen = [fid for fid in known if fid in _split(args.features)]
 
     drop = _split(args.no_features)
-    if not args.skip_intro:
+    if args.skip_intro is True and "intro" not in chosen:
+        chosen.append("intro")
+    if args.skip_intro is False:
         drop.append("intro")
     out = [fid for fid in chosen if fid not in drop]
 
@@ -118,24 +121,25 @@ def main(argv=None):
                         help="features to leave out, subtracted from the default "
                              "set or from --features")
     parser.add_argument("--no-skip-intro", action="store_false", dest="skip_intro",
-                        default=True,
-                        help="keep the opening logos; by default the splashscreen "
-                             "is redirected to a no-op so the game boots straight "
-                             "to the main menu")
+                        default=None,
+                        help="keep the opening logos (default)")
+    parser.add_argument("--skip-intro", action="store_true", dest="skip_intro",
+                        help="opt in to skipping splashscreen (may bypass game initialization)")
     args = parser.parse_args(argv)
 
     if args.game_dir is None:
         parser.print_help()
         return 0
 
+    selected_features = _selection(args)
     ns = argparse.Namespace(
         game_dir=args.game_dir, work=None, mode="luna",
         lang="chinesesimplified", revert=args.revert,
-        force=args.force, dry_run=args.dry_run, skip_intro=args.skip_intro,
-        features=_selection(args))
+        force=args.force, dry_run=args.dry_run, skip_intro="intro" in selected_features,
+        features=selected_features)
     code = 0
     try:
-        code = cmd_fontfix.run(ns) or 0
+        code = engine_adapters.run(ns) or 0
     except SystemExit as e:
         print("!! %s" % e)
         code = 1

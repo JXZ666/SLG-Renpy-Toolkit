@@ -14,6 +14,8 @@ from __future__ import print_function
 import codecs
 import contextlib
 import io
+import hashlib
+import copy
 import os
 import shutil
 import stat
@@ -24,6 +26,63 @@ import threading
 import cmd_fontfix
 import compat
 import features
+import engine_adapters
+import proj
+import patch_transaction
+
+
+def _diagnostic_snapshot(root):
+    result = {}
+    for name in ("traceback.txt", "errors.txt", "log.txt"):
+        path = os.path.join(root, name)
+        try:
+            st = os.lstat(path)
+            if not stat.S_ISREG(st.st_mode) or _is_reparse(st):
+                continue
+            with open(path, "rb") as stream:
+                stream.seek(max(0, st.st_size - LOG_TAIL_LIMIT))
+                data = stream.read(LOG_TAIL_LIMIT)
+            result[name] = ((st.st_mtime_ns, st.st_size, hashlib.sha256(data).hexdigest()),
+                            data.decode("utf-8", "replace"))
+        except OSError:
+            continue
+    return result
+
+
+def _stage_ownership(source_dir, staged_dir, work_dir):
+    """Copy verified ownership evidence so installed games can be simulated safely."""
+    source_work = proj.work_dir_for(source_dir)
+    if not os.path.isfile(proj.manifest_path(source_work)):
+        return
+    manifest = proj.load_manifest(source_work)
+    cmd_fontfix._check_manifest_game(source_dir, manifest)
+    staged_manifest = copy.deepcopy(manifest)
+    for entry in manifest["files"]:
+        rel = entry["path"]
+        original = patch_transaction.safe_path(source_dir, rel)
+        staged = patch_transaction.safe_path(staged_dir, rel)
+        if not entry.get("sha256") or not os.path.isfile(original) or proj.file_hash(original) != entry["sha256"]:
+            raise ValueError("installed file no longer matches ownership record: " + rel)
+        if proj.file_hash(staged) != entry["sha256"]:
+            raise ValueError("staged file differs from verified source: " + rel)
+        if entry.get("backup"):
+            backup_rel = entry["backup"]
+            backup = patch_transaction.safe_path(source_work, backup_rel)
+            if proj.file_hash(backup) != entry.get("backup_sha256"):
+                raise ValueError("adapter backup changed: " + rel)
+            dest = patch_transaction.safe_path(work_dir, backup_rel)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copy2(backup, dest)
+    for entry in manifest["quarantined"]:
+        backup_rel = "quarantine/" + entry["stored_as"]
+        backup = patch_transaction.safe_path(source_work, backup_rel)
+        if not entry.get("sha256") or proj.file_hash(backup) != entry["sha256"]:
+            raise ValueError("quarantined backup changed: " + entry["path"])
+        dest = patch_transaction.safe_path(work_dir, backup_rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copy2(backup, dest)
+    staged_manifest.update(game_dir=staged_dir, game_id=proj.game_identity(staged_dir))
+    proj.save_manifest(work_dir, staged_manifest)
 
 
 LOG_TAIL_LIMIT = 16000
@@ -206,6 +265,10 @@ class SimulationSession(object):
         self.process = None
         self.exit_code = None
         self.main_menu_confirmed = False
+        self.gameplay_confirmed = False
+        self.runtime_errors = []
+        self._diagnostic_baseline = _diagnostic_snapshot(staged_dir)
+        self._diagnostics_seen = dict(self._diagnostic_baseline)
         self._stop_requested = False
         self._cleaned = False
         self._log_callback = log_callback
@@ -266,8 +329,16 @@ class SimulationSession(object):
         os.makedirs(saves_dir, exist_ok=True)
         os.makedirs(persistent_dir, exist_ok=True)
         environment = os.environ.copy()
+        # Inherited debug/skip flags must not accidentally change the test entry.
+        for name in ("RENPY_SKIP_MAIN_MENU", "RENPY_SKIP_SPLASHSCREEN",
+                     "RENPY_FORCE_DEVELOPER", "RENPY_DEVELOPER"):
+            if name in environment:
+                self._append_log("[simulation] ignored inherited " + name + "\n")
+                environment.pop(name)
         environment["RENPY_PATH_TO_SAVES"] = saves_dir
         environment["RENPY_MULTIPERSISTENT"] = persistent_dir
+        self._diagnostic_baseline = _diagnostic_snapshot(self.staged_dir)
+        self._diagnostics_seen = dict(self._diagnostic_baseline)
 
         try:
             process = subprocess.Popen(
@@ -313,7 +384,12 @@ class SimulationSession(object):
         """Return None while running, else return the process exit code."""
         if self.process is None:
             return None
+        self.check_runtime_errors()
         code = self.process.poll()
+        if self.runtime_errors:
+            self._set_launch_step("failed", "new game error: " + self.runtime_errors[-1])
+            self.exit_code = code
+            return code
         if code is None:
             return None
         self.exit_code = code
@@ -333,6 +409,9 @@ class SimulationSession(object):
         """Record the user's explicit confirmation that the menu appeared."""
         if self.process is None:
             raise RuntimeError("no staged game has been launched")
+        self.check_runtime_errors()
+        if self.runtime_errors:
+            raise RuntimeError("game reported a new error: " + self.runtime_errors[-1])
         code = self.process.poll()
         if code not in (None, 0):
             raise RuntimeError("the staged game exited with code %s" % code)
@@ -341,6 +420,40 @@ class SimulationSession(object):
         self.main_menu_confirmed = True
         self._set_launch_step(
             "success", "user confirmed the staged game reached its main menu")
+        return True
+
+    def check_runtime_errors(self):
+        """Observe only changed diagnostics; a running process can still crash in-game."""
+        current = _diagnostic_snapshot(self.staged_dir)
+        for name, value in current.items():
+            if self._diagnostics_seen.get(name, (None,))[0] == value[0]:
+                continue
+            self._diagnostics_seen[name] = value
+            text = value[1]
+            if not text.strip():
+                continue
+            self._append_log("\n[game diagnostic: " + name + "]\n" + text + "\n")
+            if name in ("traceback.txt", "errors.txt") or any(
+                    marker in text for marker in ("uncaught exception", "Full traceback:",
+                                                  "ScriptError:", "Traceback (most recent")):
+                message = name + ": " + next((line.strip() for line in reversed(text.splitlines())
+                                              if "Error:" in line or "Exception:" in line),
+                                             "game reported an error")
+                self.runtime_errors.append(message)
+        if self.runtime_errors:
+            self._set_launch_step("failed", "new game error: " + self.runtime_errors[-1])
+        return list(self.runtime_errors)
+
+    def confirm_gameplay(self):
+        if not self.main_menu_confirmed:
+            raise RuntimeError("confirm the main menu before gameplay")
+        self.check_runtime_errors()
+        if self.runtime_errors:
+            raise RuntimeError("game reported a new error: " + self.runtime_errors[-1])
+        if self.process.poll() not in (None, 0) or self._stop_requested:
+            raise RuntimeError("game did not finish normally")
+        self.gameplay_confirmed = True
+        _step(self.steps, "gameplay", "success", "user confirmed the tested gameplay scene")
         return True
 
     def stop(self, timeout=3.0):
@@ -391,15 +504,15 @@ def prepare(game_dir, feature_ids, log_callback=None):
     source_dir = os.path.abspath(os.fspath(game_dir))
     selected = list(feature_ids or [])
     known = features.ids()
-    if not os.path.isdir(os.path.join(source_dir, "game")):
-        _step(steps, "compat", "failed", "selected directory has no game/ subdirectory")
-        raise SimulationError("not a Ren'Py game directory: %s" % source_dir, steps)
+    if engine_adapters.detect(source_dir)["id"] in ("unknown", "ambiguous"):
+        _step(steps, "compat", "failed", "selected directory has no supported engine layout")
+        raise SimulationError("not a supported game directory: %s" % source_dir, steps)
     if not selected or any(fid not in known for fid in selected):
         _step(steps, "compat", "failed", "select one or more known patch features")
         raise SimulationError("invalid simulation feature selection", steps)
 
     try:
-        survey = compat.survey(source_dir)
+        survey = engine_adapters.survey(source_dir)
     except Exception as exc:
         _step(steps, "compat", "failed", "compatibility scan failed: %s" % exc)
         raise SimulationError("compatibility scan failed: %s" % exc, steps)
@@ -473,6 +586,7 @@ def prepare(game_dir, feature_ids, log_callback=None):
         _notify(log_callback, "Copying game into a temporary session.\n")
         _copy_tree(source_dir, staged_dir)
         os.makedirs(work_dir)
+        _stage_ownership(source_dir, staged_dir, work_dir)
         _step(steps, "copy", "success", "isolated game copy created")
 
         _step(steps, "install", "running", "installing selected patches in the copy")
@@ -490,7 +604,7 @@ def prepare(game_dir, feature_ids, log_callback=None):
         args.features = selected
         try:
             with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(captured):
-                cmd_fontfix.run(args)
+                engine_adapters.run(args)
         except BaseException as exc:
             # SystemExit is used by the CLI runner for a refused operation;
             # KeyboardInterrupt from the host should propagate after cleanup.

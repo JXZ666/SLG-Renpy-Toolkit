@@ -16,7 +16,7 @@ a = Analysis(
     # fontTools resolves its table classes by tag at runtime, so static analysis
     # does not find them; the whole package is 4.4 MB, which is cheaper than
     # guessing which submodules the merge path touches.
-    hiddenimports=collect_submodules('fontTools'),
+    hiddenimports=collect_submodules('fontTools') + ['renpy_compat', 'renpy_gallery'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT))
 
 import branding  # noqa: E402
 from tools.write_version_info import render_version_info  # noqa: E402
+from tools import build_provenance  # noqa: E402
 
 
 TARGETS = (
@@ -45,9 +46,7 @@ def mode_output_dir(output_dir: Path, build_mode: str) -> Path:
     return output_dir
 
 
-def build(output_dir: Path, build_mode: str = DEFAULT_BUILD_MODE) -> int:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_dir = output_dir.resolve()
+def _compile_targets(output_dir: Path, build_mode: str) -> int:
     with tempfile.TemporaryDirectory(prefix="rpykit-build-") as temp_name:
         temp_dir = Path(temp_name)
         for mode in selected_modes(build_mode):
@@ -74,6 +73,29 @@ def build(output_dir: Path, build_mode: str = DEFAULT_BUILD_MODE) -> int:
                 result = subprocess.run(command, cwd=ROOT, env=env)
                 if result.returncode:
                     return result.returncode
+    return 0
+
+
+def build(output_dir: Path, build_mode: str = DEFAULT_BUILD_MODE) -> int:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = output_dir.resolve()
+    provenance = build_provenance.begin(ROOT, output_dir, branding.APP_VERSION, selected_modes(build_mode))
+    try:
+        code = _compile_targets(output_dir, build_mode)
+    except BaseException:
+        build_provenance.fail(output_dir, provenance, "build_interrupted_or_exception")
+        raise
+    if code:
+        build_provenance.fail(output_dir, provenance, "pyinstaller_failed")
+        return code
+    try:
+        build_provenance.finish(ROOT, output_dir, provenance, [target[2] for target in TARGETS])
+    except (OSError, ValueError) as exc:
+        # Do not serialize exception paths or environment values into metadata.
+        if provenance["status"] != "failed":
+            build_provenance.fail(output_dir, provenance, "artifact_verification_failed")
+        print("Build provenance verification failed (%s)." % type(exc).__name__)
+        return 1
     return 0
 
 

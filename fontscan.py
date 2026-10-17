@@ -177,24 +177,17 @@ def script_blobs(game_dir, archive_paths):
 
 
 def font_inventory(game_dir, archive_paths):
-    """{file name: {'where': ..., 'kind': 'loose'|'rpa', ...}} for shipped fonts.
-
-    Keyed by basename so that a reference of `fonts/tycho.ttf` matches an
-    entry named `game/fonts/tycho.ttf` without the caller knowing the layout.
-    """
+    """Full loader paths, plus basename aliases only when unambiguous."""
     out = {}
     gdir = os.path.join(game_dir, "game")
-
     if os.path.isdir(gdir):
         for root, dirs, files in os.walk(gdir):
-            dirs[:] = [d for d in dirs if d not in ("cache", "saves")]
-            for fn in files:
+            dirs[:] = sorted(d for d in dirs if d not in ("cache", "saves"))
+            for fn in sorted(files):
                 if fn.lower().endswith(FONT_EXTS):
-                    out.setdefault(fn, {
-                        "where": "loose",
-                        "path": os.path.join(root, fn),
-                    })
-
+                    path = os.path.join(root, fn)
+                    rel = os.path.relpath(path, gdir).replace(os.sep, "/")
+                    out[rel] = {"where": "loose", "path": path, "loader_name": rel}
     for apath in archive_paths:
         try:
             index = rpa.load_index(apath)
@@ -202,23 +195,25 @@ def font_inventory(game_dir, archive_paths):
             continue
         for entry in sorted(index):
             if entry.lower().endswith(FONT_EXTS):
-                out.setdefault(basename(entry), {
-                    "where": "rpa",
-                    "archive": apath,
-                    "entry": entry,
-                })
-
-    # Ren'Py's own faces live outside game/, and DejaVuSans is the stock
-    # default in every gui.rpy, so it is missing from most inventories.
+                rel = entry.replace("\\", "/")
+                out.setdefault(rel, {"where": "rpa", "archive": apath,
+                                     "entry": entry, "loader_name": rel})
     common = os.path.join(game_dir, "renpy", "common")
     if os.path.isdir(common):
         for root, dirs, files in os.walk(common):
-            for fn in files:
+            dirs.sort()
+            for fn in sorted(files):
                 if fn.lower().endswith(FONT_EXTS):
-                    out.setdefault(fn, {
-                        "where": "renpy-common",
-                        "path": os.path.join(root, fn),
-                    })
+                    rel = os.path.relpath(os.path.join(root, fn), common).replace(os.sep, "/")
+                    out.setdefault(rel, {"where": "renpy-common", "path": os.path.join(root, fn),
+                                         "loader_name": rel})
+    groups = {}
+    for name, item in out.items():
+        groups.setdefault(basename(name).lower(), []).append((name, item))
+    for entries in groups.values():
+        if len(entries) == 1:
+            name, item = entries[0]
+            out.setdefault(basename(name), item)
     return out
 
 
@@ -227,10 +222,8 @@ def font_bytes(entry):
     try:
         if entry["where"] == "rpa":
             index = rpa.load_index(entry["archive"])
-            for name, e in index.items():
-                if basename(name) == basename(entry["entry"]):
-                    return rpa.read_entry(entry["archive"], e)
-            return None
+            record = index.get(entry["entry"])
+            return rpa.read_entry(entry["archive"], record) if record is not None else None
         with open(entry["path"], "rb") as f:
             return f.read()
     except (OSError, rpa.RpaError):

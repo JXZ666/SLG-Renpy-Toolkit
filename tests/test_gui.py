@@ -86,6 +86,11 @@ class FakeSimulationSession:
         self.steps[-1].update(status="success", message="main menu confirmed")
         return True
 
+    def confirm_gameplay(self):
+        if not self.confirmed:
+            raise RuntimeError("menu not confirmed")
+        return True
+
     def stop(self):
         self.stopped = True
         if self.process and self.process.poll() is None:
@@ -126,6 +131,7 @@ def simulation_checks(app, root, check):
     """Drive the complete simulation UI with fake sessions and processes."""
     with tempfile.TemporaryDirectory(prefix="rpykit-gui-sim-") as game_dir:
         os.makedirs(os.path.join(game_dir, "game"))
+        os.makedirs(os.path.join(game_dir, "renpy"))
         app.game_dir = game_dir
         app.var_dir.set(game_dir)
         app._apply_feature_support(survey_data(True))
@@ -139,7 +145,7 @@ def simulation_checks(app, root, check):
             prepare_patch = mock.patch.object(
                 appgui.simulation, "prepare", return_value=session)
             survey_patch = mock.patch.object(
-                appgui.compat, "survey",
+                appgui.engine_adapters, "survey",
                 return_value=survey if survey is not None else survey_data(True))
             prepare_patch.start()
             survey_patch.start()
@@ -163,7 +169,7 @@ def simulation_checks(app, root, check):
         # An unsupported API must fail before the staging function is called.
         app._reset_simulation_status()
         unsupported_prepare = mock.Mock()
-        with mock.patch.object(appgui.compat, "survey",
+        with mock.patch.object(appgui.engine_adapters, "survey",
                                return_value=survey_data(False)), \
                 mock.patch.object(appgui.simulation, "prepare",
                                   unsupported_prepare):
@@ -177,7 +183,7 @@ def simulation_checks(app, root, check):
         # A valid staged install without a root-level exe is installation
         # success but cannot claim a runnable game.
         no_launcher = FakeSimulationSession(launchers=())
-        with mock.patch.object(appgui.compat, "survey",
+        with mock.patch.object(appgui.engine_adapters, "survey",
                                return_value=survey_data(True)), \
                 mock.patch.object(appgui.simulation, "prepare",
                                   return_value=no_launcher):
@@ -222,6 +228,9 @@ def simulation_checks(app, root, check):
               pump_until(root, lambda: app.sim_confirmed)
               and chosen.confirmed,
               app.sim_result_message)
+        check("main menu alone keeps gameplay unverified", app.sim_result_level == "warn")
+        app.confirm_simulation_gameplay()
+        check("explicit gameplay confirmation records success", app.sim_result_level == "ok")
         chosen.process.returncode = 0
         app._poll_simulation()
         pump_until(root, lambda: chosen.cleaned
@@ -246,7 +255,7 @@ def simulation_checks(app, root, check):
         pump_until(root, lambda: exited_early.cleaned
                    and app.sim_session is None and not app.busy)
         check("confirmation after zero exit marks success and cleans copy",
-              app.sim_result_level == "ok" and exited_early.cleaned
+              app.sim_result_level == "warn" and exited_early.cleaned
               and app.sim_stage_state["launch"][0] == "ok",
               app.sim_result_message)
 
@@ -299,21 +308,24 @@ def main():
         check("simulation action has a readable label",
               app.btn_dry.cget("text") == "\u6a21\u62df\u5b89\u88c5\u5e76\u8fd0\u884c",
               ascii(app.btn_dry.cget("text")))
-        check("simulation shows the five explicit result stages",
+        check("simulation shows the six explicit result stages",
               sorted(app.sim_stage_vars) ==
-              ["compat", "confirm", "copy", "install", "launch"])
+              ["compat", "confirm", "copy", "gameplay", "install", "launch"])
         check("process and log controls are real widgets",
               app.btn_go.cget("command") is not None and app.log.winfo_exists())
 
         # The skip-the-logos box. Default on, and it has to reach the Namespace
         # the worker thread reads - the GUI only ever reads the Tk variable on
         # the main thread, so this is the seam worth pinning.
-        check("the skip-intro box starts ticked", app.var_skip.get() is True)
+        check("the skip-intro box defaults off", app.var_skip.get() is False)
         check("it is live before a game is picked",
               app.chk_skip.cget("state") == "normal")
         check("it rides into the namespace",
               appgui._namespace("x", skip_intro=False).skip_intro is False
-              and appgui._namespace("x").skip_intro is True)
+              and appgui._namespace("x").skip_intro is False
+              and "intro" not in appgui._namespace("x").features
+              and appgui._namespace("x", skip_intro=True).skip_intro is True
+              and "intro" in appgui._namespace("x", skip_intro=True).features)
 
         # The boxes are drawn from features.CATALOG rather than from a list in
         # the layout, which is the whole point of the catalogue: a third feature
@@ -324,6 +336,23 @@ def main():
               {fid: app.var_on[fid].get() for fid in app.rows}
               == {e["id"]: bool(e.get("default_on", True))
                   for e in appgui.features.CATALOG})
+        root.geometry("900x620")
+        app._apply_feature_support({"feature_support": {
+            fid: {"supported": True, "reasons": [
+                "Only recognized built-in gallery and replay conditions are bypassed; "
+                "game-specific custom achievement, inventory and scripted unlock conditions remain unsupported."]}
+            for fid in app.rows}})
+        root.update()
+        check("small window keeps long partial-support reasons fully visible",
+              all(row.reason_label.winfo_height() >= row.reason_label.winfo_reqheight()
+                  and row.reason_label.winfo_y() + row.reason_label.winfo_height() <= row.card.winfo_height()
+                  for row in app.rows.values()))
+        check("long reasons use the available card width",
+              all(row.reason_label.cget("wraplength") <=
+                  row.card.winfo_width() / row.card._get_widget_scaling() - 24
+                  for row in app.rows.values()))
+        app._apply_feature_support(None)
+        root.update()
         # Both spellings of the selection travel together, or the runner would
         # have to guess which one the window meant.
         check("the two spellings agree",
@@ -375,13 +404,14 @@ def main():
         with tempfile.TemporaryDirectory(prefix="rpykit-gui-library-") as library_root:
             game_dir = os.path.join(library_root, "Example")
             os.makedirs(os.path.join(game_dir, "game"))
+            os.makedirs(os.path.join(game_dir, "renpy"))
             installed = {"shim": False, "ours": False, "current": False,
                          "mode": None}
             for entry in appgui.features.CATALOG:
                 installed.update({key: False for key in entry["state"].values()})
-            with mock.patch.object(appgui.compat, "survey",
+            with mock.patch.object(appgui.engine_adapters, "survey",
                                    return_value=survey_data(True)), \
-                    mock.patch.object(appgui.cmd_fontfix, "installed_state",
+                    mock.patch.object(appgui.engine_adapters, "installed_state",
                                       return_value=installed):
                 app.set_game_dir(game_dir)
                 check("game scan starts without blocking the view", app.scan_busy)
@@ -401,6 +431,7 @@ def main():
         # filtered before they can reach the worker Namespace.
         with tempfile.TemporaryDirectory(prefix="rpykit-gui-") as tmp:
             os.makedirs(os.path.join(tmp, "game"))
+            os.makedirs(os.path.join(tmp, "renpy"))
             survey = {
                 "verdict": "warn", "label": "Test Game",
                 "renpy": {"version": "7.5.3", "name": "Ren'Py"},
@@ -411,8 +442,8 @@ def main():
             installed = {"shim": False, "ours": False, "current": False,
                          "intro": False, "intro_ours": False,
                          "intro_current": False, "mode": None}
-            with mock.patch.object(appgui.compat, "survey", return_value=survey), \
-                    mock.patch.object(appgui.cmd_fontfix, "installed_state",
+            with mock.patch.object(appgui.engine_adapters, "survey", return_value=survey), \
+                    mock.patch.object(appgui.engine_adapters, "installed_state",
                                       return_value=installed):
                 app.game_dir = tmp
                 app.var_dir.set(tmp)
@@ -422,6 +453,7 @@ def main():
                 check("legacy survey keeps features available",
                       all(row.supported for row in app.rows.values()))
 
+                app.var_on["intro"].set(True)
                 survey["feature_support"] = {
                     "fontfix": {"supported": False,
                                 "reasons": ["config.font_name_map is unavailable"]},

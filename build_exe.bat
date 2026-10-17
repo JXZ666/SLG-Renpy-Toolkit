@@ -1,5 +1,5 @@
 @echo off
-REM Builds GUI and CLI executables under release\1.0.0 by default.
+REM Builds GUI and CLI executables under release\<APP_VERSION> by default.
 REM Pass an output directory as the first argument to choose another destination.
 setlocal
 cd /d "%~dp0"

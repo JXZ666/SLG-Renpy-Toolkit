@@ -13,7 +13,7 @@ from tools.write_version_info import render_version_info
 
 
 def test_version_is_single_release_constant():
-    assert branding.APP_VERSION == "1.0.0"
+    assert branding.APP_VERSION == "1.1.0"
 
 
 def test_cli_version(capsys):
@@ -21,7 +21,7 @@ def test_cli_version(capsys):
         app_main.main(["--version"])
     except SystemExit as exc:
         assert exc.code == 0
-    assert capsys.readouterr().out.strip() == "SLG-Renpy-Toolkit 1.0.0"
+    assert capsys.readouterr().out.strip() == "SLG-Renpy-Toolkit 1.1.0"
 
 
 def test_cli_without_game_prints_help_instead_of_opening_gui(capsys, monkeypatch):
@@ -43,10 +43,10 @@ def test_window_entry_forwards_only_first_path_to_gui(monkeypatch):
 
 def test_version_resource_has_numeric_and_string_version_fields():
     resource = render_version_info("SLG-Renpy-Toolkit-CLI.exe")
-    assert "filevers=(1, 0, 0, 0)" in resource
-    assert "prodvers=(1, 0, 0, 0)" in resource
-    assert "StringStruct('FileVersion', '1.0.0')" in resource
-    assert "StringStruct('ProductVersion', '1.0.0')" in resource
+    assert "filevers=(1, 1, 0, 0)" in resource
+    assert "prodvers=(1, 1, 0, 0)" in resource
+    assert "StringStruct('FileVersion', '1.1.0')" in resource
+    assert "StringStruct('ProductVersion', '1.1.0')" in resource
     assert "StringStruct('OriginalFilename', 'SLG-Renpy-Toolkit-CLI.exe')" in resource
 
 

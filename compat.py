@@ -392,6 +392,10 @@ def survey(game_dir, quick=False):
     out["splash"] = _splash(game_dir)
     out["collisions"] = _collisions(game_dir)
     out["feature_support"] = _feature_support(game_dir)
+    import renpy_compat
+    import renpy_gallery
+    out["feature_support"]["runtime_compat"] = renpy_compat.survey(game_dir)
+    out["feature_support"]["gallery"] = renpy_gallery.survey(game_dir)
 
     if not os.path.isdir(os.path.join(game_dir, "renpy")) and not lib["names"]:
         out["reasons"].append("既没有 renpy/ 也没有 lib/，不像是一个 Ren'Py 发行版。")

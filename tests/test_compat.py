@@ -138,7 +138,7 @@ def main():
         s = compat.survey(g)
         check("py3 is clean", s["verdict"] == "ok", s["reasons"])
         check("default fixture supports both features",
-              all(x["supported"] for x in s["feature_support"].values()),
+              all(s["feature_support"][fid]["supported"] for fid in ("fontfix", "intro")),
               s["feature_support"])
         check("py3 label is 可装", s["label"] == "可装", s["label"])
         check("loose sources are counted, not called packed",
