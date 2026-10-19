@@ -1,6 +1,6 @@
 # UI 审计：1.2.0 本地测试版
 
-审计对象：`appgui.py` 的五页桌面界面（处理、游戏库、游戏信息、运行日志、设置），以及 `app_state.py` 的窗口状态持久化。审计基于 Windows 11、Python 3.13.12、CustomTkinter 6.0.0、系统缩放 150%。
+审计对象：`appgui.py` 的六页桌面界面（处理、游戏库、游戏信息、运行日志、帮助、设置），以及 `app_state.py` 的窗口状态持久化。审计基于 Windows 11、Python 3.13.12、CustomTkinter 6.0.0、系统缩放 150%。
 
 ## 1. 设计阅读
 
