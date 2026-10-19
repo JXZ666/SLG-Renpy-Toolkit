@@ -28,7 +28,7 @@ import appgui  # noqa: E402
 import features  # noqa: E402
 import ui_focus  # noqa: E402
 
-PAGES = ("process", "library", "toolbox", "log", "settings")
+PAGES = ("process", "library", "toolbox", "log", "help", "settings")
 
 
 def _pump(root, rounds=5):
@@ -94,7 +94,7 @@ def _support():
     }
 
 
-def capture(output):
+def capture(output, width=900, height=620):
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     report = []
@@ -110,14 +110,14 @@ def capture(output):
             state = app_state.default_state()
             state.update(
                 appearance=mode,
-                window={"width": 900, "height": 620},
+                window={"width": width, "height": height},
                 games=[{"path": str(game), "name": "合成样本",
                         "available": True}],
                 active_game="",
             )
             app = appgui.App(root, state=state,
                              state_path=str(temp / (mode + "-state.json")))
-            root.geometry("900x620+80+60")
+            root.geometry("%dx%d+80+60" % (width, height))
             app.game_dir = str(game)
             app.var_dir.set(str(game))
             survey = _fake_survey(game)
@@ -140,9 +140,10 @@ def capture(output):
                     _pump(root)
                 image = ImageGrab.grab(
                     window=ctypes.windll.user32.GetParent(root.winfo_id()))
-                image.save(output / ("%s-%s.png" % (mode, page)))
+                filename = "%s-%dx%d-%s.png" % (mode, width, height, page)
+                image.save(output / filename)
                 page_reports[page] = {
-                    "screenshot": "%s-%s.png" % (mode, page),
+                    "screenshot": filename,
                     "width": image.width,
                     "height": image.height,
                     "widgets": len(list(_walk(app.pages[page]))),
@@ -177,6 +178,8 @@ def capture(output):
                     chain = _focus_chain(root, app.btn_go)
             report.append({
                 "mode": mode,
+                "viewport": {"width": width, "height": height},
+                "feature_columns": getattr(app, "_feature_columns", 1),
                 "pages": page_reports,
                 "focus": focus,
                 "focus_chain": chain,
@@ -198,8 +201,10 @@ def capture(output):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--width", type=int, default=900)
+    parser.add_argument("--height", type=int, default=620)
     args = parser.parse_args(argv)
-    report = capture(args.output)
+    report = capture(args.output, args.width, args.height)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 

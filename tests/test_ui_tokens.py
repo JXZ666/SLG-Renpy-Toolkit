@@ -10,6 +10,7 @@ import pytest
 
 from ui_tokens import (
     FONT_ROLES,
+    LAYOUT,
     PALETTES,
     PAIRS,
     RADIUS,
@@ -127,6 +128,13 @@ def test_spacing_and_radius_only_increase():
     assert set(RADIUS) == {"control", "button", "card"}
     assert RADIUS["control"] < RADIUS["button"] < RADIUS["card"]
     assert all(value % 2 == 0 for value in SPACING)
+
+
+def test_layout_breakpoints_are_ordered():
+    assert LAYOUT["sidebar_width"] > 0
+    assert LAYOUT["page_padding"] >= 16
+    assert LAYOUT["feature_two_column_min"] < LAYOUT["max_content_width"]
+    assert LAYOUT["max_content_width"] >= 1200
 
 
 def test_palette_falls_back_to_dark_and_returns_a_copy():

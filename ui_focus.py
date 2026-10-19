@@ -90,6 +90,14 @@ def _activate_checkbox(widget):
         pass
 
 
+def _activate_radio(widget):
+    try:
+        if str(widget.cget("state")) != "disabled":
+            widget.invoke()
+    except (tk.TclError, AttributeError, TypeError):
+        pass
+
+
 def _cycle_segment(widget, delta):
     try:
         values = list(widget.cget("values") or [])
@@ -151,6 +159,9 @@ def install(widget, ring_color, background=None, activate=None):
     elif isinstance(widget, ctk.CTkCheckBox):
         target.bind("<Return>", lambda _event: _activate_checkbox(widget), add="+")
         target.bind("<space>", lambda _event: _activate_checkbox(widget), add="+")
+    elif isinstance(widget, ctk.CTkRadioButton):
+        target.bind("<Return>", lambda _event: _activate_radio(widget), add="+")
+        target.bind("<space>", lambda _event: _activate_radio(widget), add="+")
     elif isinstance(widget, ctk.CTkSegmentedButton):
         target.bind("<Left>", lambda _event: _cycle_segment(widget, -1), add="+")
         target.bind("<Right>", lambda _event: _cycle_segment(widget, 1), add="+")

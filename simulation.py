@@ -525,9 +525,14 @@ def prepare(game_dir, feature_ids, log_callback=None):
     support = survey.get("feature_support", {})
     unsupported = []
     for fid in selected:
-        feature = support.get(fid, {})
-        if not feature.get("supported", False):
-            reason = "; ".join(feature.get("reasons", [])) or "required engine APIs are unknown"
+        feature = support.get(fid) if isinstance(support, dict) else None
+        if not isinstance(feature, dict):
+            feature = {}
+        if feature.get("supported") is not True:
+            reasons = feature.get("reasons") or []
+            if isinstance(reasons, str):
+                reasons = [reasons]
+            reason = "; ".join(str(item) for item in reasons) or "required engine APIs are unknown"
             unsupported.append("%s: %s" % (features.title_of(fid), reason))
     if unsupported:
         message = "selected feature is not supported: " + " | ".join(unsupported)
@@ -611,6 +616,8 @@ def prepare(game_dir, feature_ids, log_callback=None):
             output = captured.getvalue()
             message = str(exc) or exc.__class__.__name__
             if output:
+                # The GUI log is the user's only view of a failed prepare.
+                _notify(log_callback, output)
                 message += "\n" + output[-4000:]
             _step(steps, "install", "failed", message)
             if isinstance(exc, KeyboardInterrupt):

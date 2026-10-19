@@ -77,6 +77,13 @@ SPACING = (4, 8, 12, 16, 24, 32)
 
 RADIUS = {"control": 6, "button": 10, "card": 14}
 
+LAYOUT = {
+    "sidebar_width": 224,
+    "max_content_width": 1440,
+    "feature_two_column_min": 1120,
+    "page_padding": 24,
+}
+
 # Audited "foreground/background" pairs and the WCAG minimum each must reach.
 # Body copy needs 4.5:1.  Large text, focus rings and the strong border that
 # marks a control's edge need 3:1.  ``accent_fill/on_accent`` is the primary
@@ -163,6 +170,7 @@ __all__ = [
     "FONT_ROLES",
     "SPACING",
     "RADIUS",
+    "LAYOUT",
     "palette",
     "contrast_ratio",
     "audit",

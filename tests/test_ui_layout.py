@@ -45,6 +45,45 @@ def test_sticky_actions_are_visible_at_minimum_size(ui_app):
     assert app.btn_dry.cget("state") == "normal"
 
 
+def test_wide_window_uses_two_feature_columns(ui_app):
+    app, root, _game = ui_app
+    root.geometry("1600x900")
+    app._show_page("process")
+    _pump(root)
+    assert app._feature_columns == 2
+    assert len(app.feature_cards) == 4
+    assert app.feature_cards[1].grid_info()["column"] == 1
+    assert app.feature_cards[2].grid_info()["row"] == 1
+    assert app.page_host.winfo_width() >= 1200
+
+
+def test_narrow_window_keeps_one_feature_column(ui_app):
+    app, root, _game = ui_app
+    root.geometry("900x620")
+    app._show_page("process")
+    _pump(root)
+    assert app._feature_columns == 1
+    assert all(card.grid_info()["column"] == 0
+               for card in app.feature_cards)
+
+
+def test_help_page_lists_every_feature(ui_app):
+    app, root, _game = ui_app
+    app._show_page("help")
+    _pump(root)
+    assert app.active_page == "help"
+    for fid in appgui.features.ids():
+        assert fid in app.help_cards
+    assert "fontfix" in app.help_cards
+
+    root.geometry("1600x900")
+    _pump(root)
+    app._apply_responsive()
+    _pump(root)
+    assert app._help_columns == 2
+    assert list(app.help_cards.values())[1].grid_info()["column"] == 1
+
+
 def test_dynamic_wrap_replaces_fixed_card_widths(ui_app):
     app, root, _game = ui_app
     app._show_page("library")

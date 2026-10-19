@@ -114,16 +114,20 @@ def test_install_requires_confirmation_before_spawning(ui_app):
 
 def test_revert_requires_confirmation_and_installed_work(ui_app):
     instance, _root, _game_dir = ui_app
-    instance._installed = {"shim": True, "ours": True, "current": True,
-                           "intro": False, "intro_ours": False,
-                           "intro_current": False}
-    with mock.patch.object(appgui.messagebox, "askyesno", return_value=False), \
+    installed = {"shim": True, "ours": True, "current": True,
+                 "intro": False, "intro_ours": False,
+                 "intro_current": False}
+    with mock.patch.object(appgui.engine_adapters, "installed_state",
+                           return_value=installed), \
+            mock.patch.object(appgui.messagebox, "askyesno",
+                              return_value=False), \
             mock.patch.object(instance, "_spawn") as spawn:
         instance.revert()
     assert not spawn.called
 
-    instance._installed = {}
-    with mock.patch.object(appgui.messagebox, "showinfo") as info, \
+    with mock.patch.object(appgui.engine_adapters, "installed_state",
+                           return_value={}), \
+            mock.patch.object(appgui.messagebox, "showinfo") as info, \
             mock.patch.object(instance, "_spawn") as spawn:
         instance.revert()
     assert info.called and not spawn.called

@@ -306,7 +306,8 @@ def main():
         root.update()
 
         check("window builds", app.log is not None
-              and set(app.pages) == {"process", "library", "toolbox", "log", "settings"})
+              and set(app.pages) == {"process", "library", "toolbox", "log",
+                                    "help", "settings"})
         check("version is visible in the window",
               app.version_label.cget("text") == "v0.9.0",
               app.version_label.cget("text"))

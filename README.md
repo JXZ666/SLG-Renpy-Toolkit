@@ -1,6 +1,6 @@
 # SLG-Renpy神奇妙妙工具 · SLG-Renpy-Toolkit
 
-给游戏安装可选择、可撤销的小补丁。**1.1.5 是界面测试版，功能默认值与 1.1.0 相同：只安装字体补丁**，跳过开场、运行兼容和画廊 / 回放需主动选择，并以目标游戏的预检范围为准。
+给游戏安装可选择、可撤销的小补丁。**1.2.0 是本地测试版：在 1.1.5 界面基础上增加全宽布局、离线帮助、统一运行日志和一批状态修复；功能默认值仍是只安装字体补丁**。跳过开场、运行兼容和画廊 / 回放需主动选择，并以目标游戏的预检范围为准。
 
 | 功能 ID | 默认 | 当前范围 |
 |---|---|---|
@@ -20,6 +20,12 @@
 5. 确认所需场景后，再对原游戏安装。需要撤销时使用“撤销还原”，它按安装账本恢复工具改动，不依赖当前勾选状态。
 
 可以把游戏文件夹拖到 GUI exe 图标上预选目录；拖到 CLI exe 则按默认功能处理。
+
+## 帮助与日志
+
+- 左侧“帮助”页提供每个功能、模拟、安装/撤销、常见问题和内容边界的离线说明；功能行右侧的“说明”会直接打开对应主题。
+- “模拟安装并运行”的原始输出只写入左侧“运行日志”，处理页只保留模拟步骤状态；模拟卡提供“查看运行日志”，失败会自动切到日志页。
+- 本工具不解锁付费、订阅或 DRM 内容，也不伪造购买状态；检测到这类门禁时会明确说明不支持。详见帮助页的“付费/订阅内容”。
 
 ## 命令行
 
@@ -100,19 +106,19 @@ python -m pip check
 build_exe.bat
 ```
 
-构建依赖固定在 `requirements-build.txt`；构建脚本校验版本，不自动升级。产物位于 `release\1.1.5\`，单文件 GUI / CLI 位于其 `onefile\` 子目录；onedir 版须连同 `_internal` 保留。需要指定形态时使用 `python tools/build_exe.py --mode onefile` 或 `--mode onedir`。
+构建依赖固定在 `requirements-build.txt`；构建脚本校验版本，不自动升级。产物位于 `release\1.2.0\`，单文件 GUI / CLI 位于其 `onefile\` 子目录；onedir 版须连同 `_internal` 保留。需要指定形态时使用 `python tools/build_exe.py --mode onefile` 或 `--mode onedir`。
 
-`build_manifest.json` 记录构建输入哈希、Git 基准、构建状态和产物哈希。构建期间输入变化、exe 过旧或哈希不匹配会使验证失败；显示 `1.1.5` 不能单独证明 exe 来自当前源码。
+`build_manifest.json` 记录构建输入哈希、Git 基准、构建状态和产物哈希。构建期间输入变化、exe 过旧或哈希不匹配会使验证失败；显示 `1.2.0` 不能单独证明 exe 来自当前源码。
 
 ## 验证边界
 
 Windows 为当前验证平台；Linux / macOS 未验证。静态预检不能替代菜单、存档、中文渲染与剧情场景测试。MV / MZ 已有脚本行为和字体回退验证，但完整 NW.js 游戏流程仍需单独验收。真实 Luna 客户端全流程、所有回放场景及其他自定义图鉴机制尚未完整实测。
 
-开发交接、历史事故和验证纪律见 [HANDOFF.md](HANDOFF.md)；本版变化见 [1.1.5 测试版说明](release_notes/1.1.5-test.md)，界面规则见 [UI 审计](docs/UI_AUDIT.md) 与 [UI 系统](docs/UI_SYSTEM.md)。
+开发交接、历史事故和验证纪律见 [HANDOFF.md](HANDOFF.md)；本版变化见 [1.2.0 测试版说明](release_notes/1.2.0-test.md)，功能说明见 [帮助文档](docs/HELP.md)，界面规则见 [UI 审计](docs/UI_AUDIT.md) 与 [UI 系统](docs/UI_SYSTEM.md)。
 
 ## English
 
-Version 1.1.5 is a UI test build with the same feature defaults as 1.1.0: font fixes only. Opening-logo skipping, reviewed runtime compatibility and qualified gallery / replay access are optional. Ren'Py and RPG Maker MV / MZ are detected separately; MV / MZ currently implement font fallback only. Unknown gallery mechanisms remain unsupported, and partial adapters report their actual coverage.
+Version 1.2.0 is a local test build adding a responsive wide layout, an offline Help page, a unified Run Log and state fixes. Feature defaults remain font fixes only. Opening-logo skipping, reviewed runtime compatibility and qualified gallery / replay access are optional. Ren'Py and RPG Maker MV / MZ are detected separately; MV / MZ currently implement font fallback only. Unknown gallery mechanisms remain unsupported, and partial adapters report their actual coverage.
 
 Simulation installs into a temporary copy with isolated saves. Menu confirmation and gameplay confirmation are separate, and newly observed errors invalidate the test. Runtime qualification is not a promise that every scene or an external translation client has been tested. Changes are recorded for safe revert; ordinary gameplay progress is retained.
 

@@ -95,12 +95,15 @@ def ui_app(ui_window):
     """Reset the shared window to the default process-page state."""
     app, root, game = ui_window
     app.state["window"] = {"width": 900, "height": 620}
+    root.geometry("900x620")
     app.state["games"] = [{"path": str(game), "name": "Synthetic",
                            "available": True}]
     app.state["active_game"] = ""
     app.game_dir = str(game)
     app.var_dir.set(str(game))
     app._installed = None
+    app._survey = None
+    app.scan_failed = False
     app.sim_session = None
     app.sim_preparing = False
     app.sim_launched = False
