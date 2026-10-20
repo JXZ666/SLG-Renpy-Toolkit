@@ -39,18 +39,41 @@ def _hash(path):
     return digest.hexdigest()
 
 
-def input_hashes(root):
+def input_hashes(root, output=None):
     """Only source/build inputs are listed; no workspace, game or environment paths."""
-    root = Path(root)
-    paths = set(root.glob("*.py")) | set(root.glob("*.spec"))
-    paths |= set(root.glob("requirements*.txt")) | set(root.glob("build_exe.bat"))
-    paths |= set((root / "tools").glob("*.py"))
-    if (root / "assets").is_dir():
-        paths |= {p for p in (root / "assets").rglob("*") if p.is_file()}
+    root = Path(root).resolve()
+    output = Path(output).resolve() if output is not None else None
+    if output is not None and (output == root or output in root.parents):
+        raise ProvenanceError("build output cannot contain the source root")
+    # Include nested Python packages and runtime JS/JSON resources. Build outputs,
+    # virtual environments and per-user state are never release source inputs.
+    excluded = {".git", "build", "dist", "release", "__pycache__", ".pytest_cache",
+                "node_modules", "_work", "pip", ".mypy_cache", ".ruff_cache",
+                ".vscode", ".idea", ".codex", ".claude"}
+    paths = set()
+    def unreadable(_error):
+        raise ProvenanceError("unreadable build input directory")
+    for current, folders, files in os.walk(root, followlinks=False, onerror=unreadable):
+        folders[:] = [name for name in folders if name not in excluded
+                      and not name.lower().startswith((".venv", "venv"))
+                      and (output is None or (Path(current) / name).resolve() != output)]
+        for name in folders:
+            candidate = Path(current) / name
+            info = candidate.lstat()
+            if candidate.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400:
+                raise ProvenanceError("linked build input refused")
+        for name in files:
+            path = Path(current) / name
+            relative = path.relative_to(root)
+            if name in ("state.json", "config.local.toml") or name.endswith(".local.json"):
+                continue
+            if (relative.parts[0] == "assets" or path.suffix.lower() in (".py", ".spec", ".js", ".json")
+                    or (len(relative.parts) == 1 and (name.startswith("requirements") and name.endswith(".txt")
+                                                     or name == "build_exe.bat"))):
+                paths.add(path)
     result = {}
     for path in sorted(paths):
-        if path.is_symlink():
-            raise ProvenanceError("linked build input refused")
+        _regular_inside(root, path)
         result[path.relative_to(root).as_posix()] = _hash(path)
     return result
 
@@ -93,12 +116,26 @@ def _write(output, manifest):
             os.remove(temporary)
 
 
-def begin(root, output, version, modes):
-    manifest = {"schema_version": 1, "app_version": version, "status": "building",
+def _validate_identity(source, channel):
+    if channel not in ("stable", "local-test"):
+        raise ProvenanceError("unknown release channel")
+    if not source.get("base_commit") or source.get("dirty") is None:
+        raise ProvenanceError("known Git identity required")
+    if source["dirty"]:
+        raise ProvenanceError("clean Git source required before building")
+
+
+def begin(root, output, version, modes, channel="stable"):
+    manifest = {"schema_version": 2, "app_version": version, "channel": channel, "status": "building",
                 "started_at_utc": _now(), "finished_at_utc": None,
                 "modes": list(modes), "source": git_identity(root),
                 "windows": windows_version(), "python_version": platform.python_version(),
-                "inputs": input_hashes(root), "artifacts": []}
+                "inputs": input_hashes(root, output), "artifacts": []}
+    try:
+        _validate_identity(manifest["source"], channel)
+    except ProvenanceError:
+        fail(output, manifest, "unclean_or_unknown_source")
+        raise
     _write(output, manifest)
     return manifest
 
@@ -110,9 +147,13 @@ def fail(output, manifest, reason):
 
 def finish(root, output, manifest, executable_names):
     """Fail closed if inputs changed or any requested executable is absent."""
-    if input_hashes(root) != manifest["inputs"]:
+    if input_hashes(root, output) != manifest["inputs"]:
         fail(output, manifest, "build_inputs_changed")
         raise ProvenanceError("build inputs changed while building; rebuild from stable inputs")
+    if git_identity(root) != manifest["source"]:
+        fail(output, manifest, "git_identity_changed")
+        raise ProvenanceError("Git identity changed while building")
+    _validate_identity(manifest["source"], manifest["channel"])
     output = Path(output).resolve()
     artifacts = []
     for mode in manifest["modes"]:
@@ -139,9 +180,12 @@ def finish(root, output, manifest, executable_names):
                 artifacts.append({"path": path.relative_to(output).as_posix(), "mode": mode,
                                   "bytes": path.stat().st_size, "sha256": _hash(path)})
     # Recheck after hashing large onedir trees, too.
-    if input_hashes(root) != manifest["inputs"]:
+    if input_hashes(root, output) != manifest["inputs"]:
         fail(output, manifest, "build_inputs_changed")
         raise ProvenanceError("build inputs changed during artifact verification")
+    if git_identity(root) != manifest["source"]:
+        fail(output, manifest, "git_identity_changed")
+        raise ProvenanceError("Git identity changed during artifact verification")
     manifest.update(status="complete", finished_at_utc=_now(), artifacts=artifacts,
                     executables=list(executable_names))
     _write(output, manifest)
@@ -152,8 +196,12 @@ def verify(root, output):
     """Read-only verification against the recorded source inputs and artifacts."""
     output = Path(output).resolve()
     manifest = json.loads((output / "build_manifest.json").read_text(encoding="utf-8"))
-    if manifest.get("status") != "complete" or input_hashes(root) != manifest.get("inputs"):
+    if manifest.get("status") != "complete" or input_hashes(root, output) != manifest.get("inputs"):
         raise ProvenanceError("manifest is incomplete or current source differs")
+    if manifest.get("schema_version", 1) >= 2:
+        _validate_identity(manifest.get("source", {}), manifest.get("channel"))
+        if git_identity(root) != manifest["source"]:
+            raise ProvenanceError("current Git identity differs from build source")
     if not manifest.get("artifacts"):
         raise ProvenanceError("manifest has no artifacts")
     for entry in manifest["artifacts"]:

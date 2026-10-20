@@ -262,7 +262,16 @@ class _OperationMixin:
             messagebox.showinfo(
                 TITLE, "\u8bf7\u5148\u52fe\u9009\u81f3\u5c11\u4e00\u4e2a\u53ef\u7528\u529f\u80fd\u3002")
             return
-        if not self.game_dir or engine_adapters.detect(self.game_dir)["id"] in ("unknown", "ambiguous"):
+        try:
+            engine_id = engine_adapters.detect(self.game_dir)["id"] if self.game_dir else "unknown"
+        except Exception as exc:
+            self._scan_finished(self._scan_generation, self.game_dir, None, None,
+                                "%s: %s" % (type(exc).__name__, exc))
+            self._set_sim_result("bad", "无法读取游戏目录：%s" % exc)
+            self._show_log()
+            self._set_buttons()
+            return
+        if engine_id in ("unknown", "ambiguous"):
             self._set_sim_result("bad", "\u8bf7\u5148\u9009\u62e9\u6709\u6548\u7684\u6e38\u620f\u6839\u76ee\u5f55\u3002")
             return
 
@@ -283,20 +292,19 @@ class _OperationMixin:
             survey = engine_adapters.survey(game_dir, quick=True)
             support_map = survey.get("feature_support", {}) if isinstance(survey, dict) else {}
             unsupported = []
-            if isinstance(support_map, dict):
-                for fid in feature_ids:
-                    spec = support_map.get(fid)
-                    # Fail closed: only an explicit True is usable.  A missing
-                    # or null value is exactly how an unreviewed adapter used
-                    # to look supported and get copied into a simulation.
-                    if not isinstance(spec, dict) or spec.get("supported") is not True:
-                        reasons = spec.get("reasons") if isinstance(spec, dict) else []
-                        if isinstance(reasons, str):
-                            reasons = [reasons]
-                        if not reasons:
-                            reasons = ["support status is unknown"]
-                        unsupported.append("%s: %s" % (
-                            features.title_of(fid), "; ".join(map(str, reasons))))
+            if not isinstance(support_map, dict):
+                support_map = {}
+            for fid in feature_ids:
+                spec = support_map.get(fid)
+                # Fail closed for both an unknown feature and a malformed map.
+                if not isinstance(spec, dict) or spec.get("supported") is not True:
+                    reasons = spec.get("reasons") if isinstance(spec, dict) else []
+                    if isinstance(reasons, str):
+                        reasons = [reasons]
+                    if not isinstance(reasons, (list, tuple)) or not reasons:
+                        reasons = ["support status is unknown"]
+                    unsupported.append("%s: %s" % (
+                        features.title_of(fid), "; ".join(map(str, reasons))))
             if unsupported:
                 steps = [{"id": "compat", "status": "failed",
                           "message": "; ".join(unsupported)}]
@@ -422,7 +430,10 @@ class _OperationMixin:
             self._set_sim_stage("launch", "failed", runtime_errors[-1])
             self._set_sim_result("bad", "游戏报告了新异常：" + runtime_errors[-1])
             self._show_log()
-            self.sim_confirm_frame.pack_forget()
+            # A failed game may leave its error dialog running.  Keep the
+            # explicit stop/cleanup action reachable until cleanup succeeds.
+            self._pack_sim_confirm(finish_only=True)
+            self._set_buttons()
             if code is None:
                 self.root.after(400, self._poll_simulation)
             else:
@@ -455,7 +466,8 @@ class _OperationMixin:
         self._cleanup_simulation(stop=False)
 
     def confirm_simulation_success(self):
-        if self.sim_session is None or not self.sim_launched:
+        if (self.sim_session is None or not self.sim_launched
+                or self.busy or self.sim_confirmed):
             return
         self.busy = True
         self._set_sim_stage("confirm", "running",
@@ -473,7 +485,23 @@ class _OperationMixin:
             self.queue.put(("__sim_confirm_failed__", "%s: %s" % (type(exc).__name__, exc)))
 
     def _simulation_confirmed(self):
+        # Duplicate queued acknowledgements must not reset an already tested
+        # gameplay result or unlock controls during a later cleanup operation.
+        if self.sim_session is None or self.sim_confirmed:
+            return
         self.busy = False
+        runtime_errors = getattr(self.sim_session, "runtime_errors", [])
+        if runtime_errors:
+            # The worker may have acknowledged the menu just before a new
+            # runtime error was discovered.  Do not promote that stale result.
+            self._set_sim_stage("confirm", "failed", runtime_errors[-1])
+            self._set_sim_result("bad", "确认期间游戏报告了新异常：" + runtime_errors[-1])
+            self._pack_sim_confirm(finish_only=True)
+            self._show_log()
+            self._set_buttons()
+            if self.close_after_cleanup:
+                self._cleanup_simulation(stop=True, close_after=True)
+            return
         self.sim_confirmed = True
         self._set_sim_stage("confirm", "success",
                             "\u7528\u6237\u5df2\u786e\u8ba4\u770b\u5230\u4e3b\u83dc\u5355")
@@ -496,7 +524,7 @@ class _OperationMixin:
 
     def confirm_simulation_gameplay(self):
         session = self.sim_session
-        if session is None or not self.sim_confirmed:
+        if session is None or not self.sim_confirmed or self.sim_gameplay_confirmed:
             return
         try:
             session.confirm_gameplay()
@@ -1100,7 +1128,7 @@ class App(_OperationMixin):
             font=self._font(ui_tokens.FONT_ROLES["meta"]))
         self.version_label.pack(anchor="w", pady=(9, 0))
         self.channel_label = ctk.CTkLabel(
-            bottom, text="界面测试版", anchor="w", text_color=_PAIR["dim"],
+            bottom, text=branding.CHANNEL_LABEL, anchor="w", text_color=_PAIR["dim"],
             font=self._font(ui_tokens.FONT_ROLES["meta"]))
         self.channel_label.pack(anchor="w", pady=(2, 0))
 
@@ -1535,7 +1563,7 @@ class App(_OperationMixin):
                 border_color=_PAIR["accent_fill"],
                 font=self._font(ui_tokens.FONT_ROLES["meta"], "bold"),
                 state="normal" if available else "disabled",
-                command=lambda path=entry["path"]: self.set_game_dir(path))
+                command=lambda path=entry["path"]: self.open_library_game(path))
             open_button.pack(side="left")
             rename_button = ctk.CTkButton(
                 buttons, text="重命名", width=74, height=30,
@@ -1824,7 +1852,7 @@ class App(_OperationMixin):
         _, about = self._card(body, padding=ui_tokens.SPACING[4])
         ctk.CTkLabel(
             about, text="SLG Ren'Py Toolkit · v" + branding.APP_VERSION +
-            "（界面测试版）\n提供可撤销补丁与隔离副本模拟运行。",
+            "（%s）\n提供可撤销补丁与隔离副本模拟运行。" % branding.CHANNEL_LABEL,
             anchor="w", justify="left", wraplength=1, text_color=_PAIR["dim"],
             font=self._font(ui_tokens.FONT_ROLES["secondary"])).pack(anchor="w")
 
@@ -2005,7 +2033,7 @@ class App(_OperationMixin):
             if widget.cget("wraplength") != wrap:
                 widget.configure(wraplength=wrap)
 
-    def _pack_sim_confirm(self, cleanup=False):
+    def _pack_sim_confirm(self, cleanup=False, finish_only=False):
         if not hasattr(self, "sim_confirm_frame"):
             return
         for button in (self.btn_sim_success, self.btn_sim_failure,
@@ -2014,6 +2042,8 @@ class App(_OperationMixin):
             button.pack_forget()
         if cleanup:
             self.btn_sim_cleanup.pack(side="left")
+        elif finish_only:
+            self.btn_sim_finish.pack(side="left")
         else:
             self.btn_sim_success.pack(side="left")
             self.btn_sim_failure.pack(side="left", padx=(7, 0))
@@ -2105,7 +2135,13 @@ class App(_OperationMixin):
             self.var_toolbox_info.set("尚未选择游戏。")
             self.var_toolbox_installed.set("")
             return self._set_state("info", "先选择一个游戏目录。")
-        if engine_adapters.detect(path)["id"] in ("unknown", "ambiguous"):
+        try:
+            engine_id = engine_adapters.detect(path)["id"]
+        except Exception as exc:  # noqa: BLE001 - keep failures in the scan UI
+            self._scan_finished(generation, path, None, None,
+                                "%s: %s" % (type(exc).__name__, exc))
+            return "bad", "无法读取游戏兼容状态。"
+        if engine_id in ("unknown", "ambiguous"):
             self.scan_busy = False
             self.scan_failed = False
             self._survey = self._installed = None
@@ -2243,8 +2279,10 @@ class App(_OperationMixin):
         for button in getattr(self, "library_action_buttons", ()):
             enabled = not locked and getattr(button, "_rpykit_available", True)
             button.configure(state="normal" if enabled else "disabled")
-        confirm_ready = bool(self.sim_session and self.sim_launched and not self.busy)
-        self.btn_sim_success.configure(state="normal" if confirm_ready else "disabled")
+        confirm_ready = bool(self.sim_session and self.sim_launched and not self.busy
+                             and not getattr(self.sim_session, "runtime_errors", []))
+        self.btn_sim_success.configure(
+            state="normal" if confirm_ready and not self.sim_confirmed else "disabled")
         self.btn_sim_failure.configure(state="normal" if confirm_ready else "disabled")
         self.btn_sim_gameplay.configure(
             state="normal" if (confirm_ready and self.sim_confirmed
@@ -2274,6 +2312,10 @@ class App(_OperationMixin):
         if chosen:
             self.set_game_dir(chosen)
 
+    def open_library_game(self, game_dir):
+        self.set_game_dir(game_dir)
+        self._show_page("process")
+
     def set_game_dir(self, game_dir, remember=True):
         target = os.path.abspath(os.fspath(game_dir)) if game_dir else None
         if (self.busy or self.sim_preparing or self.sim_session is not None) and \
@@ -2283,11 +2325,12 @@ class App(_OperationMixin):
             return
         self.game_dir = target
         self.var_dir.set(self.game_dir or "")
-        if self.game_dir and remember and engine_adapters.detect(self.game_dir)["id"] not in ("unknown", "ambiguous"):
+        if self.game_dir and remember:
             try:
-                self.state = app_state.add_game(self.state, self.game_dir)
-                self._persist_state()
-                self._render_library()
+                if engine_adapters.detect(self.game_dir)["id"] not in ("unknown", "ambiguous"):
+                    self.state = app_state.add_game(self.state, self.game_dir)
+                    self._persist_state()
+                    self._render_library()
             except (OSError, TypeError, ValueError) as exc:
                 self.var_global_status.set("游戏未能加入游戏库：%s" % exc)
         elif self.game_dir and not remember:
@@ -2316,7 +2359,7 @@ class App(_OperationMixin):
             return
         active_game = self.state.get("active_game", "")
         try:
-            self.state = app_state.add_game(self.state, entry["path"], name)
+            self.state = app_state.rename_game(self.state, entry["path"], name)
         except (OSError, TypeError, ValueError) as exc:
             messagebox.showerror(TITLE, str(exc))
             return

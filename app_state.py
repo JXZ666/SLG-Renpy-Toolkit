@@ -183,3 +183,14 @@ def remove_game(state, path):
         result["active_game"] = ""
     return result
 
+
+def rename_game(state, path, name):
+    """Rename an existing bookmark even when its game is offline."""
+    result = copy.deepcopy(_sanitize(state))
+    key = _normal_path(path)
+    for item in result["games"]:
+        if _normal_path(item["path"]) == key:
+            item["name"] = _clean_name(name, item["name"])
+            return result
+    raise ValueError("该游戏已不在游戏库中，请刷新后重试。")
+

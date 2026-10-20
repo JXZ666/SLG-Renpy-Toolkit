@@ -118,7 +118,7 @@ def write_json(path, obj):
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
-    except Exception:
+    except BaseException:
         try:
             os.remove(tmp)
         except OSError:
@@ -163,6 +163,41 @@ def load_project(explicit_work=None):
 MANIFEST_NAME = "install_manifest.json"
 
 
+class ManifestVersionError(ValueError):
+    """The current tool cannot safely modify this ownership ledger."""
+
+
+def ensure_manifest_writable(manifest):
+    """Reject newer or malformed write requirements; legacy ledgers remain valid.
+
+    Reading state is deliberately unrestricted. Every mutating entry point
+    checks this before touching a game, so an older tool cannot remove a new
+    feature while leaving its dependencies or lose ownership of its files.
+    """
+    if not isinstance(manifest, dict):
+        raise ManifestVersionError("install manifest must be a JSON object")
+    if "min_tool_version" not in manifest:
+        return
+    import branding
+
+    def version(value):
+        if not isinstance(value, str) or not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", value):
+            raise ManifestVersionError("invalid min_tool_version in install manifest")
+        try:
+            return tuple(int(part) for part in value.split("."))
+        except ValueError as exc:
+            raise ManifestVersionError("invalid min_tool_version in install manifest") from exc
+
+    required = manifest["min_tool_version"]
+    minimum = version(required)
+    current = version(branding.APP_VERSION)
+    if current < minimum:
+        raise ManifestVersionError(
+            "install manifest requires tool %s or newer (current %s); "
+            "use the matching newer tool to modify or revert this installation"
+            % (required, branding.APP_VERSION))
+
+
 def manifest_path(work_dir):
     return os.path.join(work_dir, MANIFEST_NAME)
 
@@ -200,6 +235,7 @@ def file_hash(path):
 def record_file(work_dir, game_dir, rel_path, source, digest=None):
     """Record a file rpykit placed into the game directory."""
     m = load_manifest(work_dir)
+    ensure_manifest_writable(m)
     m["version"] = 2
     m["game_dir"] = os.path.abspath(game_dir)
     m["game_id"] = game_identity(game_dir)
@@ -227,6 +263,7 @@ def record_quarantine(work_dir, game_dir, rel_path, stored_as, source=None):
     source are never restored.
     """
     m = load_manifest(work_dir)
+    ensure_manifest_writable(m)
     m["version"] = 2
     m["game_dir"] = os.path.abspath(game_dir)
     m["game_id"] = game_identity(game_dir)

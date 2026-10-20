@@ -14,6 +14,8 @@ from tools.write_version_info import render_version_info
 
 def test_version_is_single_release_constant():
     assert branding.APP_VERSION == "1.2.0"
+    assert branding.APP_CHANNEL == "stable"
+    assert branding.CHANNEL_LABEL == "正式版"
 
 
 def test_cli_version(capsys):
@@ -21,7 +23,7 @@ def test_cli_version(capsys):
         app_main.main(["--version"])
     except SystemExit as exc:
         assert exc.code == 0
-    assert capsys.readouterr().out.strip() == "SLG-Renpy-Toolkit 1.2.0"
+    assert capsys.readouterr().out.strip() == "SLG-Renpy-Toolkit 1.2.0 (stable)"
 
 
 def test_cli_without_game_prints_help_instead_of_opening_gui(capsys, monkeypatch):
@@ -48,6 +50,22 @@ def test_version_resource_has_numeric_and_string_version_fields():
     assert "StringStruct('FileVersion', '1.2.0')" in resource
     assert "StringStruct('ProductVersion', '1.2.0')" in resource
     assert "StringStruct('OriginalFilename', 'SLG-Renpy-Toolkit-CLI.exe')" in resource
+    assert "flags=0x0" in resource
+    assert "SLG-Renpy-Toolkit (stable)" in resource
+
+
+def test_test_channel_sets_windows_prerelease_flag(monkeypatch):
+    monkeypatch.setattr(branding, "APP_CHANNEL", "local-test")
+    resource = render_version_info("SLG-Renpy-Toolkit.exe")
+    assert "flags=0x2" in resource
+    assert "SLG-Renpy-Toolkit (local-test)" in resource
+
+
+def test_unknown_release_channel_refused(monkeypatch):
+    import pytest
+    monkeypatch.setattr(branding, "APP_CHANNEL", "other")
+    with pytest.raises(ValueError, match="APP_CHANNEL"):
+        render_version_info("SLG-Renpy-Toolkit.exe")
 
 
 def test_gui_and_cli_specs_select_correct_subsystems():

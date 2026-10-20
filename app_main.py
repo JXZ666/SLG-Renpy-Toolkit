@@ -105,7 +105,7 @@ def main(argv=None):
         description="Install CJK fonts into a Ren'Py game so LunaTranslator's "
                     "text renders as Chinese instead of tofu.")
     parser.add_argument("--version", action="version",
-                        version="%(prog)s " + branding.APP_VERSION)
+                        version="%(prog)s " + branding.APP_VERSION + " (" + branding.APP_CHANNEL + ")")
     parser.add_argument("game_dir", nargs="?", default=None,
                         help="game root, the directory holding game/ and renpy/")
     parser.add_argument("--revert", action="store_true",

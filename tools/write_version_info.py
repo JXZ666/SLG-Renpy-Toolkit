@@ -17,6 +17,8 @@ _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 
 def render_version_info(original_filename: str) -> str:
+    if branding.APP_CHANNEL not in ("stable", "local-test"):
+        raise ValueError("APP_CHANNEL must be stable or local-test")
     match = _VERSION_RE.fullmatch(branding.APP_VERSION)
     if not match:
         raise ValueError("APP_VERSION must use MAJOR.MINOR.PATCH format")
@@ -24,13 +26,14 @@ def render_version_info(original_filename: str) -> str:
     version_tuple = "(%s)" % ", ".join(str(n) for n in numbers)
     version_text = branding.APP_VERSION
     product_name = branding.APP_SLUG
+    flags = "0x0" if branding.APP_CHANNEL == "stable" else "0x2"
     return """# UTF-8 PyInstaller version resource generated from branding.APP_VERSION.
 VSVersionInfo(
   ffi=FixedFileInfo(
     filevers={version_tuple},
     prodvers={version_tuple},
     mask=0x3f,
-    flags=0x0,
+    flags={flags},
     OS=0x4,
     fileType=0x1,
     subtype=0x0,
@@ -41,7 +44,7 @@ VSVersionInfo(
       StringTable(
         '040904B0',
         [StringStruct('CompanyName', 'SLG-Renpy-Toolkit'),
-         StringStruct('FileDescription', '{product_name}'),
+         StringStruct('FileDescription', '{product_name} ({channel})'),
          StringStruct('FileVersion', '{version_text}'),
          StringStruct('InternalName', '{product_name}'),
          StringStruct('OriginalFilename', '{original_filename}'),
@@ -56,6 +59,8 @@ VSVersionInfo(
         version_text=version_text,
         product_name=product_name,
         original_filename=original_filename,
+        flags=flags,
+        channel=branding.APP_CHANNEL,
     )
 
 

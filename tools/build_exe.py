@@ -79,7 +79,14 @@ def _compile_targets(output_dir: Path, build_mode: str) -> int:
 def build(output_dir: Path, build_mode: str = DEFAULT_BUILD_MODE) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_dir = output_dir.resolve()
-    provenance = build_provenance.begin(ROOT, output_dir, branding.APP_VERSION, selected_modes(build_mode))
+    try:
+        provenance = build_provenance.begin(
+            ROOT, output_dir, branding.APP_VERSION, selected_modes(build_mode),
+            channel=branding.APP_CHANNEL,
+        )
+    except build_provenance.ProvenanceError as exc:
+        print("Build refused: %s." % exc)
+        return 1
     try:
         code = _compile_targets(output_dir, build_mode)
     except BaseException:
@@ -104,8 +111,8 @@ def main(argv=None) -> int:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "output_dir", nargs="?", default=str(ROOT / "release" / branding.APP_VERSION),
-        help="destination directory (default: release/<version>); dist/ and build/ are untouched",
+        "output_dir", nargs="?", default=str(ROOT / "release" / branding.APP_VERSION / branding.APP_CHANNEL),
+        help="destination directory (default: release/<version>/<channel>); dist/ and build/ are untouched",
     )
     parser.add_argument(
         "--mode", choices=("onedir", "onefile", "both"), default=DEFAULT_BUILD_MODE,

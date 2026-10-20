@@ -58,8 +58,10 @@ def _write(path, data):
             os.remove(temporary)
 
 
-def _manifest(root, work):
+def _manifest(root, work, writable=False):
     manifest = proj.load_manifest(work)
+    if writable:
+        proj.ensure_manifest_writable(manifest)
     if manifest.get("game_dir") and proj.canonical_game_dir(manifest["game_dir"]) != proj.canonical_game_dir(root):
         raise TransactionError("manifest belongs to another game")
     if manifest.get("game_id") and manifest["game_id"] != proj.game_identity(root):
@@ -69,7 +71,7 @@ def _manifest(root, work):
 
 def install(root, work, writes, source="adapter:fontfix", replace=(), dry_run=False):
     """Install prepared bytes. Only explicitly replaceable foreign files are backed up."""
-    manifest = _manifest(root, work)
+    manifest = _manifest(root, work, writable=True)
     new_manifest = copy.deepcopy(manifest)
     entries = {e["path"]: e for e in manifest["files"]}
     destinations, backups = {}, {}
@@ -136,7 +138,7 @@ def install(root, work, writes, source="adapter:fontfix", replace=(), dry_run=Fa
 
 
 def revert(root, work, source="adapter:fontfix", dry_run=False):
-    manifest = _manifest(root, work)
+    manifest = _manifest(root, work, writable=True)
     remaining, actions, conflicts, consumed = [], {}, [], []
     for entry in manifest["files"]:
         if entry.get("source") != source:

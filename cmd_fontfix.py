@@ -1419,6 +1419,7 @@ def install(args, game_dir, work, ctx):
 
     manifest = proj.load_manifest(work)
     _check_manifest_game(game_dir, manifest)
+    proj.ensure_manifest_writable(manifest)
     game_paths = set(_safe_join(game_dir, rel) for rel in targets)
     if "intro" in selected:
         for name in find_intro_conflicts(game_dir):
@@ -1451,7 +1452,7 @@ def install(args, game_dir, work, ctx):
         _guard_foreign(args, game_dir, work, targets)
         for plan in plans:
             plan["apply"]()
-    except Exception:
+    except BaseException:
         # Restore all game outputs and the ownership ledger together. This also
         # undoes quarantine moves if a later feature or manifest write fails.
         for path, backup in before.items():
@@ -1475,7 +1476,8 @@ def install(args, game_dir, work, ctx):
         shutil.rmtree(snapshot, ignore_errors=True)
 
 
-def _restore_quarantine_source(game_dir, work, manifest, wanted_source):
+def _restore_quarantine_source(game_dir, work, manifest, wanted_source,
+                               allowed_entries=None):
     """Restore one recorded quarantine class after all tool files are removed.
 
     Quarantine content is verified before restoring. This function is called
@@ -1485,7 +1487,8 @@ def _restore_quarantine_source(game_dir, work, manifest, wanted_source):
     qdir = os.path.join(work, "quarantine")
     kept, restored = [], []
     for e in manifest.get("quarantined", []):
-        if e.get("source") != wanted_source:
+        if (e.get("source") != wanted_source or
+                (allowed_entries is not None and id(e) not in allowed_entries)):
             kept.append(e)
             continue
         stored = e.get("stored_as") or ""
@@ -1513,35 +1516,176 @@ def _restore_quarantine_source(game_dir, work, manifest, wanted_source):
     return restored
 
 
+def _revert_groups(game_dir, work, manifest):
+    """Preflight a whole feature, including fonts and displaced originals."""
+    groups = {fid: {"paths": set(_FEATURES[fid].targets(game_dir, {})),
+                    "quarantined": [], "conflicts": []}
+              for fid in features.ids()}
+    groups["fontfix"]["paths"].add("game/" + GAME_FONT_REL)
+    for entry in manifest["files"]:
+        if not isinstance(entry, dict):
+            raise FontFixError("invalid file entry in install manifest")
+        source = entry.get("source", "")
+        fid = ("intro" if source == "fontfix:intro" else
+               "fontfix" if source.startswith("fontfix:") else
+               source.partition(":")[2] if source.startswith("feature:") else None)
+        if fid in groups:
+            groups[fid]["paths"].add(entry.get("path", ""))
+    for entry in manifest["quarantined"]:
+        if not isinstance(entry, dict):
+            raise FontFixError("invalid quarantine entry in install manifest")
+        if entry.get("source") == QUARANTINE_INTRO:
+            groups["intro"]["quarantined"].append(entry)
+        elif entry.get("source") == QUARANTINE_REPLACED:
+            for group in groups.values():
+                if entry.get("path") in group["paths"]:
+                    group["quarantined"].append(entry)
+                    break
+            else:
+                raise FontFixError("cannot identify feature for quarantined collision")
+
+    entries = _manifest_entries(manifest)
+    legacy = not os.path.isfile(proj.manifest_path(work))
+    qdir = os.path.join(work, "quarantine")
+    for group in groups.values():
+        deletable = set()
+        for rel in sorted(group["paths"]):
+            path = _safe_join(game_dir, rel)
+            if os.path.lexists(path):
+                if not _entry_owns(path, entries.get(rel), allow_legacy_marker=legacy):
+                    group["conflicts"].append(rel + " (changed or unowned)")
+                else:
+                    deletable.add(rel)
+                    if rel.endswith(".rpy"):
+                        compiled = _safe_join(game_dir, rel + "c")
+                        if os.path.lexists(compiled):
+                            if not os.path.isfile(compiled):
+                                group["conflicts"].append(rel + "c (not a regular file)")
+                            else:
+                                deletable.add(rel + "c")
+            elif rel.endswith(".rpy") and os.path.lexists(_safe_join(game_dir, rel + "c")):
+                group["conflicts"].append(rel + "c (source missing)")
+        for entry in group["quarantined"]:
+            rel = entry.get("path", "")
+            src = _safe_join(qdir, entry.get("stored_as", ""))
+            dest = _safe_join(game_dir, rel)
+            expected = entry.get("sha256")
+            if (not os.path.isfile(src) or
+                    (not expected and manifest.get("version", 1) >= 2) or
+                    (expected and _hash_file(src) != expected)):
+                group["conflicts"].append(rel + " (quarantine missing or changed)")
+            elif os.path.lexists(dest) and rel not in deletable:
+                group["conflicts"].append(rel + " (restore destination occupied)")
+    return groups
+
+
 def revert(game_dir, work):
+    """Undo independent features atomically, preserving an entire blocked group.
+
+    The result carries conflicts even when another independent feature was
+    reverted, so callers never present a partial revert as complete success.
+    """
+    game_dir = os.path.abspath(game_dir)
+    work = os.path.abspath(work)
     manifest = proj.load_manifest(work)
     _check_manifest_game(game_dir, manifest)
+    proj.ensure_manifest_writable(manifest)
+    groups = _revert_groups(game_dir, work, manifest)
+    conflicts = ["%s: %s" % (fid, detail) for fid, group in groups.items()
+                 for detail in group["conflicts"]]
+    active = [fid for fid, group in groups.items() if not group["conflicts"]]
+    allowed = {id(entry) for fid in active for entry in groups[fid]["quarantined"]}
+    game_paths = set()
+    for fid in active:
+        for rel in groups[fid]["paths"]:
+            game_paths.add(_safe_join(game_dir, rel))
+            if rel.endswith(".rpy"):
+                game_paths.add(_safe_join(game_dir, rel + "c"))
+        for entry in groups[fid]["quarantined"]:
+            game_paths.add(_safe_join(game_dir, entry["path"]))
 
-    # Every feature, not just the selected ones: one run may have installed the
-    # fonts and a later one may have ticked only the intro, and --revert is the
-    # single command that has to undo all of it.
-    removed, restored = [], []
-    for fid in features.ids():
-        feat_removed, feat_restored = _FEATURES[fid].revert(game_dir, work, manifest)
-        removed += feat_removed
-        restored += feat_restored
-    restored += _restore_quarantine_source(
-        game_dir, work, manifest, QUARANTINE_INTRO)
-    restored += _restore_quarantine_source(
-        game_dir, work, manifest, QUARANTINE_REPLACED)
-
-    removed_set = set(removed)
-    manifest["files"] = [e for e in manifest.get("files", [])
-                         if e.get("path") not in removed_set]
-    proj.save_manifest(work, manifest)
+    # Snapshot before the first removal. Quarantine is restored together with
+    # the ledger, including when save_manifest writes and then raises.
+    snapshot = tempfile.mkdtemp(prefix="rpykit-revert-")
+    try:
+        before, directories, missing_dirs = {}, set(), set()
+        for index, path in enumerate(sorted(game_paths)):
+            parent = os.path.dirname(path)
+            while os.path.commonpath((game_dir, parent)) == game_dir:
+                if os.path.isdir(parent):
+                    directories.add(parent)
+                else:
+                    missing_dirs.add(parent)
+                if parent == game_dir:
+                    break
+                parent = os.path.dirname(parent)
+            backup = os.path.join(snapshot, "file-%d" % index)
+            if os.path.isfile(path):
+                shutil.copy2(path, backup)
+                before[path] = backup
+            else:
+                before[path] = None
+        manifest_file = proj.manifest_path(work)
+        manifest_backup = os.path.join(snapshot, "manifest.json")
+        had_manifest = os.path.isfile(manifest_file)
+        if had_manifest:
+            shutil.copy2(manifest_file, manifest_backup)
+        qdir = _safe_join(work, "quarantine")
+        qbackup = os.path.join(snapshot, "quarantine")
+        had_quarantine = os.path.isdir(qdir)
+        if had_quarantine:
+            for root, dirs, files in os.walk(qdir):
+                for name in dirs + files:
+                    _safe_join(work, os.path.relpath(os.path.join(root, name), work))
+            shutil.copytree(qdir, qbackup)
+        try:
+            removed, restored = [], []
+            for fid in active:
+                feat_removed, feat_restored = _FEATURES[fid].revert(game_dir, work, manifest)
+                removed += feat_removed
+                restored += feat_restored
+            restored += _restore_quarantine_source(
+                game_dir, work, manifest, QUARANTINE_INTRO, allowed)
+            restored += _restore_quarantine_source(
+                game_dir, work, manifest, QUARANTINE_REPLACED, allowed)
+            removed_set = set(removed)
+            manifest["files"] = [e for e in manifest["files"]
+                                 if e.get("path") not in removed_set]
+            if removed or restored:
+                proj.save_manifest(work, manifest)
+        except BaseException:
+            for path, backup in before.items():
+                if backup:
+                    _copy_atomic(backup, path)
+                elif os.path.isfile(path):
+                    os.remove(path)
+            for directory in sorted(directories, key=len):
+                os.makedirs(directory, exist_ok=True)
+            for directory in sorted(missing_dirs, key=len, reverse=True):
+                if os.path.isdir(directory) and not os.listdir(directory):
+                    os.rmdir(directory)
+            if had_manifest:
+                _copy_atomic(manifest_backup, manifest_file)
+            elif os.path.isfile(manifest_file):
+                os.remove(manifest_file)
+            if os.path.isdir(qdir):
+                shutil.rmtree(qdir)
+            if had_quarantine:
+                shutil.copytree(qbackup, qdir)
+            raise
+    finally:
+        shutil.rmtree(snapshot, ignore_errors=True)
 
     for rel in removed:
         print("[S6] removed: %s" % rel)
     for rel in restored:
         print("[S6] restored: %s" % rel)
-    if not removed:
+    for conflict in conflicts:
+        print("[S6] conflict: %s; feature and dependencies kept" % conflict)
+    if not removed and not restored:
         print("[S6] nothing to remove")
-    print("[S6] reverted")
+    print("[S6] revert incomplete: conflicts remain" if conflicts else "[S6] reverted")
+    return {"removed": removed, "restored": restored, "conflicts": conflicts}
 
 
 def run(args):
@@ -1564,9 +1708,9 @@ def run(args):
             print("[S6] dry-run: revert preview only; no files changed")
             args.outcome = "dry_run"
             return 0
-        revert(game_dir, work)
-        args.outcome = "changed"
-        return 0
+        result = revert(game_dir, work)
+        args.outcome = "conflicts" if result["conflicts"] else "changed"
+        return 1 if result["conflicts"] else 0
 
     if args.mode not in ("luna", "full"):
         raise SystemExit("--mode must be luna or full")
@@ -1605,6 +1749,7 @@ def run(args):
     manifest = proj.load_manifest(work)
     _check_manifest_game(game_dir, manifest)
     if not args.dry_run:
+        proj.ensure_manifest_writable(manifest)
         work = proj.ensure_dir(work)
 
     print("[S6] work   : %s" % work)
