@@ -39,7 +39,7 @@ def test_unknown_survey_refuses_all_features(tmp_path):
     survey = engine_adapters.survey(tmp_path)
     assert survey["verdict"] == "bad"
     assert all(not row["supported"] for row in survey["feature_support"].values())
-    assert set(survey["feature_support"]) == {"fontfix", "intro", "gallery", "runtime_compat"}
+    assert set(survey["feature_support"]) == {"fontfix", "intro", "gallery", "runtime_compat", "translation"}
 
 
 def test_ambiguous_installed_state_never_uses_rpg_layout(tmp_path, monkeypatch):

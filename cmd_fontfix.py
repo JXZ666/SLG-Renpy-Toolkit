@@ -1395,6 +1395,7 @@ def _addon_feature(fid, module_name):
 
 _FEATURES["runtime_compat"] = _addon_feature("runtime_compat", "renpy_compat")
 _FEATURES["gallery"] = _addon_feature("gallery", "renpy_gallery")
+_FEATURES["translation"] = _addon_feature("translation", "renpy_translation")
 
 
 def install(args, game_dir, work, ctx):
@@ -1576,6 +1577,8 @@ def _revert_groups(game_dir, work, manifest):
                 group["conflicts"].append(rel + " (quarantine missing or changed)")
             elif os.path.lexists(dest) and rel not in deletable:
                 group["conflicts"].append(rel + " (restore destination occupied)")
+    if "translation" in groups and groups["translation"]["conflicts"]:
+        groups["fontfix"]["conflicts"].append("translation connection retained; font dependency retained")
     return groups
 
 
@@ -1651,6 +1654,9 @@ def revert(game_dir, work):
             removed_set = set(removed)
             manifest["files"] = [e for e in manifest["files"]
                                  if e.get("path") not in removed_set]
+            if (manifest.get("min_tool_version") == "1.3.0" and not any(
+                    e.get("source") == "feature:translation" for e in manifest["files"])):
+                manifest.pop("min_tool_version", None)
             if removed or restored:
                 proj.save_manifest(work, manifest)
         except BaseException:

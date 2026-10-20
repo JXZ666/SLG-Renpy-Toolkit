@@ -236,7 +236,7 @@ def test_default_output_is_channel_specific(monkeypatch, tmp_path):
     monkeypatch.setattr(build_exe, "ROOT", tmp_path)
     monkeypatch.setattr(build_exe, "build", lambda path, mode: calls.append((path, mode)) or 0)
     assert build_exe.main(["--mode", "onefile"]) == 0
-    assert calls == [(tmp_path / "release" / "1.2.0" / "stable", "onefile")]
+    assert calls == [(tmp_path / "release" / "1.3.0" / "local-test", "onefile")]
 
 
 def test_custom_ignored_output_inside_source_does_not_hash_its_manifest(tmp_path):

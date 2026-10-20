@@ -291,7 +291,7 @@ class SimulationSession(object):
     def _set_launch_step(self, status, message):
         _step(self.steps, "launch", status, message)
 
-    def launch(self, rel_launcher):
+    def launch(self, rel_launcher, environment=None):
         """Launch one listed staged executable, never a path in the source."""
         if self._cleaned:
             raise RuntimeError("simulation session has already been cleaned up")
@@ -328,7 +328,19 @@ class SimulationSession(object):
         persistent_dir = os.path.join(self.session_dir, "multipersistent")
         os.makedirs(saves_dir, exist_ok=True)
         os.makedirs(persistent_dir, exist_ok=True)
+        extra_environment = environment
         environment = os.environ.copy()
+        # A normal simulation must never inherit another live translation
+        # session's token. Only this launch's explicit host can enable it.
+        for name in list(environment):
+            if name.startswith("RPYKIT_TRANSLATION_"):
+                environment.pop(name)
+        if extra_environment is not None:
+            if not isinstance(extra_environment, dict) or any(
+                    not isinstance(k, str) or not k.startswith("RPYKIT_TRANSLATION_")
+                    or not isinstance(v, str) for k, v in extra_environment.items()):
+                raise ValueError("invalid translation launch environment")
+            environment.update(extra_environment)
         # Inherited debug/skip flags must not accidentally change the test entry.
         for name in ("RENPY_SKIP_MAIN_MENU", "RENPY_SKIP_SPLASHSCREEN",
                      "RENPY_FORCE_DEVELOPER", "RENPY_DEVELOPER"):

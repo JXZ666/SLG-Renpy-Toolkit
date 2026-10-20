@@ -36,7 +36,7 @@ def survey(root, quick=False):
     reason = "Unknown engine" if engine["id"] == "unknown" else "Multiple engine layouts detected"
     support = rpgmaker.support(root) if recognized else {
         fid: {"supported": False, "mechanism": None, "reasons": [reason]}
-        for fid in ("fontfix", "intro", "runtime_compat", "gallery")}
+        for fid in ("fontfix", "intro", "runtime_compat", "gallery", "translation")}
     usable = recognized and support["fontfix"]["supported"]
     return {"game_dir": os.path.abspath(root), "engine": engine,
             "ok": usable, "verdict": "ok" if usable else "bad",

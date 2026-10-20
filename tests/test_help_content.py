@@ -14,6 +14,8 @@ EXPECTED_IDS = [
     "intro",
     "runtime_compat",
     "gallery",
+    "translation",
+    "library",
     "simulation",
     "install",
     "paid_content",
@@ -53,6 +55,7 @@ def test_every_feature_has_a_topic_and_the_four_required_sections():
         ("install", ("流程", "失败时", "注意")),
         ("paid_content", ("本工具不做什么", "建议")),
         ("faq", ("常见问题", "日志与反馈")),
+        ("library", ("首次选择启动程序", "启动与打开文件夹", "版本与配置")),
     ],
 )
 def test_utility_topics_exist_with_required_sections(topic_id, required):
@@ -119,3 +122,18 @@ def test_topic_order_and_key_set_are_stable():
     assert [topic_id for topic_id, _topic in help_content.topics()] == EXPECTED_IDS
     assert [topic_id for topic_id, _topic in help_content.topics()] == [
         topic_id for topic_id, _topic in help_content.topics()]
+
+
+def test_translation_explains_session_provider_and_preservation_limits():
+    text = _all_text(help_content.topic_for("translation"))
+    for required in ("2 秒", "0 到 30", "Google", "DPAPI", "auto", "zh-CN",
+                     "迟到", "预测", "NVL", "8.3 / 8.4", "原文", "缓存",
+                     "不自动转用收费 AI", "普通双击", "停止汉化"):
+        assert required in text, required
+
+
+def test_simulation_help_places_controls_and_session_state_in_log():
+    text = _all_text(help_content.topic_for("simulation"))
+    assert "运行日志" in text
+    assert "全部" in text
+    assert "清空日志文本不会清除会话状态" in text

@@ -236,6 +236,8 @@ def record_file(work_dir, game_dir, rel_path, source, digest=None):
     """Record a file rpykit placed into the game directory."""
     m = load_manifest(work_dir)
     ensure_manifest_writable(m)
+    if source == "feature:translation":
+        m["min_tool_version"] = "1.3.0"
     m["version"] = 2
     m["game_dir"] = os.path.abspath(game_dir)
     m["game_id"] = game_identity(game_dir)

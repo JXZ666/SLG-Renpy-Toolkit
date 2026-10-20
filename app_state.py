@@ -11,18 +11,26 @@ import json
 import os
 import tempfile
 
+import branding
+import game_launch
 
-SCHEMA_VERSION = 2
+
+SCHEMA_VERSION = 3
 DEFAULT_WINDOW = {"width": 1180, "height": 780}
 APPEARANCES = {"system", "light", "dark"}
 
 
-def state_path():
+def _settings_path(preview=False):
     """Return the per-user settings path without creating any directories."""
     base = os.environ.get("LOCALAPPDATA")
     if not base:
         base = os.path.expanduser("~")
-    return os.path.join(base, "rpykit", "ui_state.json")
+    return os.path.join(base, "rpykit", "ui_state.preview.json" if preview else "ui_state.json")
+
+
+def state_path():
+    """Use an independent UI configuration for the local test channel."""
+    return _settings_path(preview=branding.APP_CHANNEL == "local-test")
 
 
 def default_state():
@@ -105,11 +113,20 @@ def _sanitize(raw):
             if key in seen:
                 continue
             seen.add(key)
-            state["games"].append({
+            cleaned_entry = {
                 "path": path,
                 "name": _clean_name(entry.get("name"), os.path.basename(path)),
                 "available": available,
-            })
+            }
+            if entry.get("launcher_rel"):
+                try:
+                    # Keep a safe reference while a drive is offline or an exe
+                    # is missing.  Every launch validates the live file again.
+                    cleaned_entry["launcher_rel"] = game_launch.normalize_launcher_rel(
+                        entry["launcher_rel"])
+                except (TypeError, ValueError):
+                    pass
+            state["games"].append(cleaned_entry)
 
     active = raw.get("active_game")
     if isinstance(active, str):
@@ -123,7 +140,12 @@ def _sanitize(raw):
 
 def load_state(path=None):
     """Read settings safely; malformed or old files fall back to defaults."""
-    filename = path or state_path()
+    filename = state_path() if path is None else os.fspath(path)
+    if (path is None and branding.APP_CHANNEL == "local-test"
+            and not os.path.lexists(filename)):
+        # Import stable appearance/bookmarks only until a preview file exists.
+        # Merely reading must never create or modify either channel's settings.
+        filename = _settings_path(preview=False)
     try:
         with open(filename, "r", encoding="utf-8") as stream:
             return _sanitize(json.load(stream))
@@ -133,7 +155,7 @@ def load_state(path=None):
 
 def save_state(state, path=None):
     """Atomically write a validated settings snapshot and return its path."""
-    filename = os.path.abspath(path or state_path())
+    filename = os.path.abspath(state_path() if path is None else os.fspath(path))
     clean = _sanitize(state)
     parent = os.path.dirname(filename)
     os.makedirs(parent, exist_ok=True)
@@ -191,6 +213,20 @@ def rename_game(state, path, name):
     for item in result["games"]:
         if _normal_path(item["path"]) == key:
             item["name"] = _clean_name(name, item["name"])
+            return result
+    raise ValueError("该游戏已不在游戏库中，请刷新后重试。")
+
+
+def set_launcher(state, path, launcher_rel):
+    """Return a copy with this bookmark's manually chosen exe, or clear it."""
+    result = copy.deepcopy(_sanitize(state))
+    key = _normal_path(path)
+    for item in result["games"]:
+        if _normal_path(item["path"]) == key:
+            if launcher_rel is None or launcher_rel == "":
+                item.pop("launcher_rel", None)
+            else:
+                item["launcher_rel"] = game_launch.validate_launcher(item["path"], launcher_rel)
             return result
     raise ValueError("该游戏已不在游戏库中，请刷新后重试。")
 

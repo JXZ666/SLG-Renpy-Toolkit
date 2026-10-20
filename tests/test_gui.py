@@ -67,7 +67,7 @@ class FakeSimulationSession:
         self.stopped = False
         self.cleaned = False
 
-    def launch(self, rel_launcher):
+    def launch(self, rel_launcher, environment=None):
         self.launcher = rel_launcher
         self.process = FakePopen()
         self.steps[-1].update(status="running", message="mock process started")

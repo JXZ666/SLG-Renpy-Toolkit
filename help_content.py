@@ -1,11 +1,13 @@
 """Offline help topics for the built-in Help page.
 
-This module is data only. It imports no GUI toolkit and performs no network
+This module contains only content and pure search. It imports no GUI toolkit and performs no network
 or filesystem access, so the Help page can render it without starting a game
 or reading the user's library.
 """
 
 import copy
+import re
+import unicodedata
 
 
 TOPICS = {
@@ -174,6 +176,88 @@ TOPICS = {
             },
         ],
     },
+    "translation": {
+        "title": "实时汉化（试验）",
+        "summary": "玩到当前对白或选项时才翻译；默认免费机翻，超时保留原文。",
+        "sections": [
+            {
+                "heading": "它做什么",
+                "body": [
+                    "安装可撤销的连接补丁，不把译文、AI Key 或服务凭据写进游戏。普通双击游戏显示原文；在工具里点“开始汉化”才启用本次会话。",
+                    "当前对白和符合条件的标准 ADV 选项实际执行时才请求翻译；预测阶段不联网，不在启动前批量预译剧情。",
+                    "默认源语言 auto、目标语言 zh-CN，默认最多等待 2 秒；等待时间可调整为 0 到 30 秒。0 秒表示暂停翻译、保留原文且不发请求。一组菜单共享同一等待预算。",
+                    "及时成功时显示译文；超时、服务失败或连接断开时保留原文。迟到结果只进入缓存，不改写当前已经显示的句子。",
+                    "缓存按游戏、原文、语言、提供商和模型配置隔离。保留原文标签、变量占位符，以及选项顺序、条件和返回值。",
+                ],
+            },
+            {
+                "heading": "适用条件",
+                "body": [
+                    "首批仅对已审核接口的 Ren'Py 8.3 / 8.4 提供试验支持，具体范围以预检结果为准，不能仅凭版本号判断。",
+                    "覆盖对白与标准 ADV 剧情选项；NVL、自定义菜单及未验证版本保留原文，不承诺所有屏幕文本都能翻译。",
+                    "内置汉化与外部 Luna 内嵌互斥，检测到冲突时停止内置模式并说明；不要同时启用两套内嵌翻译。",
+                    "其他引擎尚不支持内置汉化；RPG Maker MV / MZ 目前只支持字体回退。",
+                ],
+            },
+            {
+                "heading": "服务与凭据",
+                "body": [
+                    "默认免费机翻使用 Google 无 Key 试验通道，该端点可能变更、失效或限流。失败会说明原因并回退原文，不自动转用收费 AI。",
+                    "自填 AI 模式需要自行提供兼容接口地址、模型和 Key，可能由你选择的服务商计费。默认不记忆 Key；主动选择记忆时使用 Windows DPAPI 加密。",
+                    "游戏只连接带随机会话凭据的本机代理；外网请求与 Key 留在工具侧。被选中翻译的文本会发送给当前配置的服务。",
+                    "不要把 Key、账号或完整剧情附在问题反馈中。帮助检索完全离线，不会向翻译服务发送检索词。",
+                ],
+            },
+            {
+                "heading": "风险与验证",
+                "body": [
+                    "先在隔离副本试用，普通存档和 multipersistent 均使用副本独立目录，再验证对白、选项、快进、回滚和读档。",
+                    "机翻可能不准确。标签或变量占位符不匹配时保留原文；部分文本保持原文不代表应跳过游戏自己的错误检查。",
+                    "点击“停止汉化”或关闭工具后，原游戏继续运行并回退原文；不会为停止翻译而结束正常游戏进程。",
+                    "模拟副本仍需使用运行日志页的结束、清理或重试清理操作；关闭工具时会按模拟会话规则处理副本。",
+                ],
+            },
+            {
+                "heading": "撤销",
+                "body": [
+                    "“撤销还原”按安装账本移除工具写入的连接补丁；无需删除游戏文本或修改语言设置。",
+                    "停止会话不等于卸载连接补丁；普通双击游戏时连接补丁保持惰性，仍显示原文。",
+                    "撤销不修改存档与自然进度。含 1.3 功能的账本需要符合最低工具版本的程序处理，旧版会拒绝修改并提示使用新版。",
+                ],
+            },
+        ],
+    },
+    "library": {
+        "title": "游戏库与快捷启动",
+        "summary": "为每个游戏手动选择启动程序，快捷开始游戏或打开本地文件夹。",
+        "sections": [
+            {
+                "heading": "首次选择启动程序",
+                "body": [
+                    "每个游戏第一次启动都需要你手动选择 exe，即使只找到一个候选。可选择游戏目录内的子目录程序；取消选择不会启动游戏。",
+                    "工具只保存相对于该游戏根目录的启动路径；不允许选择游戏目录外的 exe。文件移动或失效后，下一次启动会要求重新选择。",
+                    "需要改用其他启动器时，使用“更换启动程序”。名称、目录和启动程序属于该条目，不取决于当前处理页选中的游戏。",
+                ],
+            },
+            {
+                "heading": "启动与打开文件夹",
+                "body": [
+                    "“开始游戏”正常启动已选 exe，工作目录为 exe 所在文件夹。关闭工具不会结束这类正常启动的游戏。",
+                    "“打开文件夹”直接打开对应库条目的本地目录。路径失效或目录离线时会明确提示，不会打开其他条目的目录。",
+                    "需要实时翻译时使用“开始汉化”，并先安装受支持的连接补丁；普通“开始游戏”不自动启用汉化会话。",
+                    "“打开处理页”会切到处理页面并选择该游戏；条目暂时离线时仍可重命名。",
+                ],
+            },
+            {
+                "heading": "版本与配置",
+                "body": [
+                    "1.2 正式版稳定原有四项补丁；1.3 测试版新增可选实时汉化，默认仍只有字体补丁开启。",
+                    "正式版和测试版使用独立界面配置。测试版首次只读导入正式版的书签和外观，不覆盖正式版配置。",
+                    "两版共用安装账本与备份，并通过最低可写工具版本检查避免旧版改动新版功能；看到版本提示时应使用对应新版撤销。",
+                ],
+            },
+        ],
+    },
     "simulation": {
         "title": "模拟运行",
         "summary": "在隔离副本里安装并启动，确认主菜单和剧情后再决定是否写入原目录。",
@@ -186,7 +270,8 @@ TOPICS = {
                     "普通存档和 multipersistent 指向会话自己的目录，不使用原游戏的存档。",
                     "只在副本里安装所选功能，再启动副本根目录的 .exe；不会启动原目录的启动器。",
                     "先确认进入主菜单，再单独确认实际剧情、读档或新游戏等场景。两次确认分别记录。",
-                    "结束模拟后清理临时会话；清理失败时保留错误提示和重试入口。",
+                    "模拟步骤、结果、主菜单与剧情确认、结束和重试清理全部在“运行日志”页；处理页入口会跳转到这里。",
+                    "结束模拟后清理临时会话；清理失败时保留错误提示和重试入口。切页或清空日志文本不会清除会话状态。",
                 ],
             },
             {
@@ -251,7 +336,7 @@ TOPICS = {
                     "工具工作区默认在 %LOCALAPPDATA%\\rpykit，可用 RPYKIT_WORK 更改。账本和备份不要手动删除，否则撤销会失去依据。",
                     "处理进行中关闭窗口，工具会询问是否等当前操作结束后再退出。",
                     "RPG Maker 会修改 js/plugins.js 的插件注册，并先保存原件；撤销时恢复原注册，不只是删除插件文件。",
-                    "安装不等于翻译。本工具不生成译文，只补字体、入口兼容或已核实的画廊访问。",
+                    "安装字体、入口兼容或画廊补丁不生成译文；实时汉化只安装连接补丁，通过工具开始会话后才请求译文。",
                 ],
             },
             {
@@ -309,11 +394,11 @@ TOPICS = {
                     "路径：Ren'Py 选择包含 game/ 的游戏根目录；RPG Maker MV 或 MZ 选择包含 js/ 或 www/js/ 的根目录。不要选择 game/ 里面的子目录。",
                     "扫描失败：先确认目录结构完整、文件可读。预检只读取结构，不改游戏；具体原因会显示在功能行，英文原文写入运行日志。",
                     "扫描不到可用功能：未知引擎、同时命中多个引擎、编译脚本没有源码、资源缺失或机制未复核时，工具会拒绝对应功能。这是有意的失败关闭，不是漏装。",
-                    "日志位置：GUI 的“运行日志”页显示最近的处理和模拟输出，可以复制或导出。详细原因也会写在这里。",
-                    "模拟失败：先看“模拟步骤”中哪一步失败，再到日志页查看完整输出。预检失败不会复制游戏；复制或安装失败会清理临时会话。",
+                    "日志位置：GUI 的“运行日志”页显示最近的处理和模拟输出，可以复制或导出；完整模拟操作区也在这里，清空文本不会丢失会话状态。",
+                    "模拟失败：在日志页查看“模拟步骤”和完整输出，并在同页结束或重试清理。预检失败不会复制游戏；复制或安装失败会清理临时会话。",
                     "模拟启动后没有确认：进程启动或正常退出都不算成功，必须手动确认主菜单；剧情和读档需要单独确认。",
                     "撤销：选择游戏目录后点“撤销还原”。工具按账本恢复自己写过的文件，不回滚存档和自然进度。",
-                    "哪些内容不支持：未知引擎、未知画廊机制、编译或归档中的自定义锁、付费与订阅门禁，以及 MV / MZ 的开场、运行兼容和画廊功能。",
+                    "哪些内容不支持：未知引擎、未知画廊机制、编译或归档中的自定义锁、付费与订阅门禁，以及 MV / MZ 的开场、运行兼容、画廊和实时汉化功能。",
                     "为什么不能全图鉴：工具只放开已复核的标准 Gallery 条件和已复核回放，不批量修改 persistent，也不承诺所有场景。",
                     "安装失败后怎么办：先撤销还原，再查看日志。不要手动删除工作区账本或备份。",
                 ],
@@ -323,7 +408,7 @@ TOPICS = {
                 "body": [
                     "运行日志页保留最近一次处理和模拟的输出；复制或导出前先检查是否包含个人路径或隐私信息。",
                     "反馈问题时附上失败步骤、错误提示和日志片段。不要附带账号、密钥、购买凭据或完整存档。",
-                    "帮助页的内容是离线的，不读取游戏文件、账号或授权数据。",
+                    "帮助页的内容和检索都是离线的，不读取游戏文件、账号或授权数据。Ctrl+F 聚焦检索框；空白分隔的多个关键词同时匹配，可搜索中文、英文和全角英文。",
                 ],
             },
         ],
@@ -346,3 +431,84 @@ def topic_for(topic_id):
 def topic_ids():
     """Return topic ids in the order the Help page should list them."""
     return list(TOPICS)
+
+
+def _normalise(text):
+    return unicodedata.normalize("NFKC", text).casefold()
+
+
+def _snippet(parts, words, limit=132):
+    """Choose one relevant paragraph and return plain text, never markup."""
+    paragraphs = [re.sub(r"\s+", " ", part).strip() for part in parts if part]
+    if not paragraphs:
+        return ""
+    paragraph = max(paragraphs, key=lambda part: sum(
+        word in _normalise(part) for word in words))
+    normal = _normalise(paragraph)
+    positions = [normal.find(word) for word in words if word in normal]
+    start = max(0, min(positions) - 30) if positions else 0
+    if len(paragraph) <= limit:
+        return paragraph
+    start = min(start, max(0, len(paragraph) - limit))
+    excerpt = paragraph[start:start + limit]
+    return ("…" if start else "") + excerpt + (
+        "…" if start + limit < len(paragraph) else "")
+
+
+def search(query):
+    """Search all offline topic text with whitespace-separated AND terms.
+
+    Return at most one result per topic. Title and heading hits rank first;
+    ties preserve topic and section order. A match spanning several sections
+    still finds the topic and opens its strongest matching section. Empty
+    queries return topic overviews. Results contain only independent values.
+    """
+    words = list(dict.fromkeys(_normalise(query or "").split()))
+    ranked = []
+    for topic_id, topic in TOPICS.items():
+        title = topic["title"]
+        summary = topic["summary"]
+        title_text = _normalise(title)
+        summary_text = _normalise(summary)
+        header = title_text + "\n" + summary_text
+        sections = topic["sections"]
+        section_texts = [
+            _normalise(section["heading"] + "\n" + "\n".join(section["body"]))
+            for section in sections
+        ]
+        text = header + "\n" + "\n".join(section_texts)
+        if not all(word in text for word in words):
+            continue
+
+        section_index = None
+        heading = ""
+        snippet = _snippet([summary], words)
+        score = sum(100 * (word in title_text) + 30 * (word in summary_text)
+                    for word in words)
+        if words:
+            section_scores = []
+            for index, section in enumerate(sections):
+                heading_text = _normalise(section["heading"])
+                body_text = _normalise("\n".join(section["body"]))
+                points = sum(70 * (word in heading_text) + 10 * (word in body_text)
+                             for word in words)
+                section_scores.append(points)
+            best = max(range(len(sections)), key=section_scores.__getitem__)
+            best_section = sections[best]
+            has_heading_hit = any(word in _normalise(best_section["heading"])
+                                  for word in words)
+            if section_scores[best] and (
+                    has_heading_hit or not all(word in header for word in words)):
+                section_index = best
+                heading = best_section["heading"]
+                snippet = _snippet(best_section["body"], words)
+            score += section_scores[best]
+        ranked.append((score, {
+            "topic_id": topic_id,
+            "title": title,
+            "section_index": section_index,
+            "heading": heading,
+            "snippet": snippet,
+        }))
+    ranked.sort(key=lambda entry: -entry[0])
+    return [result for _score, result in ranked]

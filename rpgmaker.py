@@ -136,14 +136,16 @@ def support(root):
                         "reasons": reasons},
             "intro": {"supported": False, "mechanism": None, "reasons": ["MV/MZ intro bypass is not implemented"]},
             "runtime_compat": {"supported": False, "mechanism": None, "reasons": ["MV/MZ runtime compatibility patches are not implemented"]},
-            "gallery": {"supported": False, "mechanism": None, "reasons": ["MV/MZ gallery unlock is not implemented"]}}
+            "gallery": {"supported": False, "mechanism": None, "reasons": ["MV/MZ gallery unlock is not implemented"]},
+            "translation": {"supported": False, "mechanism": None, "reasons": ["MV/MZ live translation is not implemented"]}}
 
 
 def empty_state():
     return {"shim": False, "ours": False, "current": False, "mode": None,
              "font": False, "intro": False, "intro_ours": False, "intro_current": False,
              "runtime_compat": False, "runtime_compat_ours": False, "runtime_compat_current": False,
-             "gallery": False, "gallery_ours": False, "gallery_current": False}
+             "gallery": False, "gallery_ours": False, "gallery_current": False,
+             "translation": False, "translation_ours": False, "translation_current": False}
 
 
 def installed_state(root):

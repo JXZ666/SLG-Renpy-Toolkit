@@ -66,6 +66,16 @@ CATALOG = [
         "state": {"installed": "gallery", "ours": "gallery_ours",
                   "current": "gallery_current"},
     },
+    {
+        "id": "translation",
+        "title": "实时汉化（试验）",
+        "summary": "安装对白与选项的连接补丁；通过工具开始汉化才生效。",
+        "desc": "玩到当前对白或选项时才请求翻译。默认免费机翻，也可自填 AI 接口。\n"
+                "默认最多等待 2 秒；超时保留原文。普通双击游戏不联网，撤销移除连接补丁。\n"
+                "请先在副本试用；首批只支持已审核的 Ren'Py 8.3 / 8.4 接口。",
+        "default_on": False,
+        "state": {"installed": "translation", "ours": "translation_ours", "current": "translation_current"},
+    },
 ]
 
 

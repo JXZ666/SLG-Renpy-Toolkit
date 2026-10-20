@@ -51,7 +51,7 @@ def test_wide_window_uses_two_feature_columns(ui_app):
     app._show_page("process")
     _pump(root)
     assert app._feature_columns == 2
-    assert len(app.feature_cards) == 4
+    assert len(app.feature_cards) == 5
     assert app.feature_cards[1].grid_info()["column"] == 1
     assert app.feature_cards[2].grid_info()["row"] == 1
     assert app.page_host.winfo_width() >= 1200

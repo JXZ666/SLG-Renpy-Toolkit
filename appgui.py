@@ -29,6 +29,7 @@ import engine_adapters
 import ui_focus
 import ui_text
 import ui_tokens
+from translation_ui import TranslationUIMixin
 
 TITLE = branding.APP_NAME
 
@@ -255,7 +256,7 @@ class _OperationMixin:
             self._set_sim_stage(stage_id, step.get("status"), step.get("message"))
 
     def simulate_run(self):
-        if self.busy or self.sim_session is not None:
+        if self.busy or self.sim_session is not None or getattr(self, "_translation_host", None) is not None:
             return
         feature_ids = self._ticked()
         if not feature_ids:
@@ -274,6 +275,20 @@ class _OperationMixin:
         if engine_id in ("unknown", "ambiguous"):
             self._set_sim_result("bad", "\u8bf7\u5148\u9009\u62e9\u6709\u6548\u7684\u6e38\u620f\u6839\u76ee\u5f55\u3002")
             return
+
+        self._sim_translation_requested = "translation" in feature_ids
+        self._sim_translation_settings = None
+        if self._sim_translation_requested:
+            try:
+                self._sim_translation_settings = self._read_translation_settings()
+            except Exception:
+                messagebox.showerror(TITLE, "请先在设置页检查翻译接口和等待时间。")
+                self._show_page("settings")
+                return
+            import uuid
+            self._translation_id = uuid.uuid4().hex
+            self._translation_game = self.game_dir
+        self._show_log()
 
         game_dir = self.game_dir
         self._log("\n===== 模拟运行 =====\n")
@@ -381,12 +396,22 @@ class _OperationMixin:
 
 
     def _simulation_launch_worker(self, session, rel_launcher):
+        host = None
         try:
-            process = session.launch(rel_launcher)
+            settings = getattr(self, "_sim_translation_settings", None)
+            if settings is not None:
+                host = self._new_translation_host(settings, self._translation_game, self._translation_id)
+                self._translation_host = host
+                process = session.launch(rel_launcher, environment=host.environment())
+            else:
+                process = session.launch(rel_launcher)
             if process is None:
                 raise RuntimeError("\u542f\u52a8\u5668\u672a\u521b\u5efa\u8fdb\u7a0b")
             self.queue.put(("__sim_launched__", process))
         except Exception as exc:  # noqa: BLE001
+            if host is not None:
+                host.stop()
+                self._translation_host = None
             self.queue.put(("__sim_launch_failed__", "%s: %s" % (type(exc).__name__, exc)))
 
     def _simulation_launched(self, _process):
@@ -562,6 +587,11 @@ class _OperationMixin:
 
     def _cleanup_simulation(self, stop=False, close_after=False):
         session = self.sim_session
+        host = getattr(self, "_translation_host", None)
+        if host is not None and getattr(self, "_sim_translation_requested", False):
+            host.stop()
+            self._translation_host = None
+            self._translation_id = None
         if session is None:
             if close_after:
                 self._destroy_root()
@@ -696,7 +726,7 @@ class _OperationMixin:
         for button in (self.btn_clear_log, self.btn_copy_log, self.btn_export_log):
             button.configure(state="normal" if has_text else "disabled")
         if hasattr(self, "btn_view_log"):
-            self.btn_view_log.configure(state="normal" if has_text else "disabled")
+            self.btn_view_log.configure(state="normal")
         if not has_text and hasattr(self, "log_empty"):
             self.log_empty.place(relx=0.5, rely=0.45, anchor="center")
 
@@ -962,7 +992,7 @@ class _OperationMixin:
                        "详细信息已写入运行日志；如提示部分文件已改，请先撤销还原再重试。")
 
 
-class App(_OperationMixin):
+class App(TranslationUIMixin, _OperationMixin):
     """CustomTkinter production shell around the existing operation state machine."""
 
     PAGES = {
@@ -1017,6 +1047,7 @@ class App(_OperationMixin):
         self._installed = None
         self.scan_failed = False
         self._font_cache = {}
+        self._init_translation()
         self._build()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.bind("<Configure>", self._schedule_geometry_save, add="+")
@@ -1323,87 +1354,6 @@ class App(_OperationMixin):
             self.var_skip = self.var_on["intro"]
             self.chk_skip = self.rows["intro"].toggle
 
-        _, body = self._card(page)
-        ctk.CTkLabel(
-            body, text="模拟与安装", anchor="w", text_color=_PAIR["fg"],
-            font=self._font(ui_tokens.FONT_ROLES["section"], "bold")).pack(
-                anchor="w")
-        ctk.CTkLabel(
-            body, text="模拟只作用于隔离副本；只有“安装到游戏”会写入原目录。",
-            anchor="w", justify="left", wraplength=1,
-            text_color=_PAIR["dim"],
-            font=self._font(ui_tokens.FONT_ROLES["secondary"])).pack(
-                fill="x", pady=(4, 10))
-        self.sim_result_var = tk.StringVar(value="尚未运行模拟安装。")
-        self.sim_result_label = ctk.CTkLabel(
-            body, textvariable=self.sim_result_var, anchor="w",
-            justify="left", wraplength=1, text_color=_PAIR["dim"],
-            font=self._font(ui_tokens.FONT_ROLES["body"], "bold"))
-        self.sim_result_label.pack(anchor="w", pady=(0, 8))
-        log_row = ctk.CTkFrame(body, fg_color="transparent")
-        log_row.pack(fill="x", pady=(0, 8))
-        self.btn_view_log = ctk.CTkButton(
-            log_row, text="查看运行日志", height=30, width=106,
-            corner_radius=ui_tokens.RADIUS["button"],
-            fg_color="transparent", border_width=1,
-            border_color=_PAIR["border_strong"],
-            hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
-            font=self._font(ui_tokens.FONT_ROLES["meta"]),
-            state="disabled", command=self._show_log)
-        self.btn_view_log.pack(side="left")
-        ctk.CTkLabel(
-            log_row, text="原始输出只写入左侧“运行日志”，这里保留步骤状态。",
-            anchor="w", justify="left", wraplength=1,
-            text_color=_PAIR["dim"],
-            font=self._font(ui_tokens.FONT_ROLES["meta"])).pack(
-                side="left", padx=(10, 0))
-
-        self.sim_confirm_frame = ctk.CTkFrame(body, fg_color="transparent")
-        self.btn_sim_success = ctk.CTkButton(
-            self.sim_confirm_frame, text="已进入主菜单", height=32,
-            corner_radius=ui_tokens.RADIUS["button"],
-            fg_color=_PAIR["accent_fill"], hover_color=_PAIR["accent_hover"],
-            text_color=_PAIR["on_accent"],
-            font=self._font(ui_tokens.FONT_ROLES["meta"], "bold"),
-            command=self.confirm_simulation_success)
-        self.btn_sim_failure = ctk.CTkButton(
-            self.sim_confirm_frame, text="启动失败", height=32,
-            corner_radius=ui_tokens.RADIUS["button"],
-            fg_color="transparent", border_width=1,
-            border_color=_PAIR["border_strong"],
-            hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
-            font=self._font(ui_tokens.FONT_ROLES["meta"]),
-            command=self.confirm_simulation_failure)
-        self.btn_sim_gameplay = ctk.CTkButton(
-            self.sim_confirm_frame, text="已测试剧情 / 读档", height=32,
-            corner_radius=ui_tokens.RADIUS["button"],
-            fg_color=_PAIR["panel_alt"], hover_color=_PAIR["accent_soft"],
-            text_color=_PAIR["fg"],
-            font=self._font(ui_tokens.FONT_ROLES["meta"]),
-            state="disabled", command=self.confirm_simulation_gameplay)
-        self.btn_sim_finish = ctk.CTkButton(
-            self.sim_confirm_frame, text="结束模拟并清理", height=32,
-            corner_radius=ui_tokens.RADIUS["button"], fg_color="transparent",
-            border_width=1, border_color=_PAIR["border_strong"],
-            hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
-            font=self._font(ui_tokens.FONT_ROLES["meta"]),
-            command=lambda: self._cleanup_simulation(
-                stop=self.sim_launched and not self.sim_process_exited))
-        self.btn_sim_cleanup = ctk.CTkButton(
-            self.sim_confirm_frame, text="重试清理", height=32,
-            corner_radius=ui_tokens.RADIUS["button"],
-            fg_color=_PAIR["bad"], hover_color=_PAIR["bad"],
-            text_color=_PAIR["on_accent"],
-            font=self._font(ui_tokens.FONT_ROLES["meta"], "bold"),
-            command=lambda: self._cleanup_simulation(
-                stop=self.sim_launched and not self.sim_process_exited))
-        self.btn_sim_success.pack(side="left")
-        self.btn_sim_failure.pack(side="left", padx=(7, 0))
-        self.btn_sim_gameplay.pack(side="left", padx=(7, 0))
-        self.btn_sim_finish.pack(side="left", padx=(7, 0))
-        self.sim_confirm_frame.pack_forget()
-        self.btn_sim_cleanup.pack_forget()
-
         footer = ctk.CTkFrame(
             outer, corner_radius=ui_tokens.RADIUS["card"],
             fg_color=_PAIR["panel"], border_width=1,
@@ -1414,15 +1364,16 @@ class App(_OperationMixin):
         self.buttons = ctk.CTkFrame(footer_inner, fg_color="transparent")
         buttons = self.buttons
         buttons.pack(fill="x")
-        self.btn_dry = ctk.CTkButton(
-            buttons, text="模拟安装并运行", height=38,
+        self.btn_open_sim = ctk.CTkButton(
+            buttons, text="前往模拟 / 日志", height=38,
             corner_radius=ui_tokens.RADIUS["button"],
             fg_color=_PAIR["accent_fill"], hover_color=_PAIR["accent_hover"],
             text_color=_PAIR["on_accent"], border_width=2,
             border_color=_PAIR["accent_fill"],
             font=self._font(ui_tokens.FONT_ROLES["secondary"], "bold"),
-            command=self.simulate_run)
-        self.btn_dry.pack(side="left")
+            command=self._show_log)
+        self.btn_open_sim.pack(side="left")
+        self.btn_view_log = self.btn_open_sim
         self.btn_go = ctk.CTkButton(
             buttons, text="安装到游戏", height=38,
             corner_radius=ui_tokens.RADIUS["button"],
@@ -1440,14 +1391,111 @@ class App(_OperationMixin):
             font=self._font(ui_tokens.FONT_ROLES["secondary"]),
             command=self.revert)
         self.btn_undo.pack(side="left", padx=(8, 0))
-        self.action_buttons = {"simulate": self.btn_dry, "go": self.btn_go,
-                               "undo": self.btn_undo}
+        self.action_buttons = {"go": self.btn_go, "undo": self.btn_undo}
         self.var_action_hint = tk.StringVar(value="")
         ctk.CTkLabel(
             footer_inner, textvariable=self.var_action_hint, anchor="w",
             justify="left", wraplength=1, text_color=_PAIR["dim"],
             font=self._font(ui_tokens.FONT_ROLES["meta"])).pack(
                 anchor="w", pady=(8, 0))
+
+
+    def _build_simulation_panel(self, parent):
+        _, body = self._card(parent)
+        ctk.CTkLabel(
+            body, text="模拟安装与运行", anchor="w", text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["section"], "bold")).pack(
+                anchor="w")
+        ctk.CTkLabel(
+            body, text="在隔离副本验证所选功能。下面的步骤、确认和清理均属于本次会话。",
+            anchor="w", justify="left", wraplength=1,
+            text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["secondary"])).pack(
+                fill="x", pady=(4, 10))
+        controls = ctk.CTkFrame(body, fg_color="transparent")
+        controls.pack(fill="x", pady=(0, 10))
+        self.btn_dry = ctk.CTkButton(controls, text="模拟安装并运行", height=36, width=132,
+                                   fg_color=_PAIR["accent_fill"], text_color=_PAIR["on_accent"],
+                                   command=self.simulate_run)
+        self.btn_dry.pack(side="left")
+        self.action_buttons["simulate"] = self.btn_dry
+        self.btn_translation_copy = ctk.CTkButton(controls, text="试运行汉化副本", height=36, width=132,
+                                   fg_color=_PAIR["panel_alt"], text_color=_PAIR["fg"],
+                                   command=self.start_translation_copy)
+        self.btn_translation_copy.pack(side="left", padx=8)
+        self.btn_translation_stop = ctk.CTkButton(controls, text="停止汉化", height=36, width=104,
+                                   fg_color=_PAIR["panel_alt"], text_color=_PAIR["fg"],
+                                   command=self.stop_translation)
+        self.btn_translation_stop.pack(side="left")
+        self.sim_result_var = tk.StringVar(value="尚未运行模拟安装。")
+        self.sim_result_label = ctk.CTkLabel(
+            body, textvariable=self.sim_result_var, anchor="w",
+            justify="left", wraplength=1, text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["body"], "bold"))
+        self.sim_result_label.pack(anchor="w", pady=(0, 8))
+        log_row = ctk.CTkFrame(body, fg_color="transparent")
+        log_row.pack(fill="x", pady=(0, 8))
+        self.btn_back_to_process = ctk.CTkButton(
+            log_row, text="返回功能选择", height=30, width=106,
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color="transparent", border_width=1,
+            border_color=_PAIR["border_strong"],
+            hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"]),
+            state="normal", command=lambda: self._show_page("process"))
+        self.btn_back_to_process.pack(side="left")
+        ctk.CTkLabel(
+            log_row, text="模拟与实时汉化的输出显示在本页下方。",
+            anchor="w", justify="left", wraplength=1,
+            text_color=_PAIR["dim"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"])).pack(
+                side="left", padx=(10, 0))
+
+        self.sim_confirm_frame = ctk.CTkFrame(body, fg_color="transparent")
+        self.btn_sim_success = ctk.CTkButton(
+            self.sim_confirm_frame, text="已进入主菜单", height=32, width=118,
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color=_PAIR["accent_fill"], hover_color=_PAIR["accent_hover"],
+            text_color=_PAIR["on_accent"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"], "bold"),
+            command=self.confirm_simulation_success)
+        self.btn_sim_failure = ctk.CTkButton(
+            self.sim_confirm_frame, text="启动失败", height=32, width=118,
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color="transparent", border_width=1,
+            border_color=_PAIR["border_strong"],
+            hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"]),
+            command=self.confirm_simulation_failure)
+        self.btn_sim_gameplay = ctk.CTkButton(
+            self.sim_confirm_frame, text="已测试剧情 / 读档", height=32, width=118,
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color=_PAIR["panel_alt"], hover_color=_PAIR["accent_soft"],
+            text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"]),
+            state="disabled", command=self.confirm_simulation_gameplay)
+        self.btn_sim_finish = ctk.CTkButton(
+            self.sim_confirm_frame, text="结束模拟并清理", height=32, width=118,
+            corner_radius=ui_tokens.RADIUS["button"], fg_color="transparent",
+            border_width=1, border_color=_PAIR["border_strong"],
+            hover_color=_PAIR["accent_soft"], text_color=_PAIR["fg"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"]),
+            command=lambda: self._cleanup_simulation(
+                stop=self.sim_launched and not self.sim_process_exited))
+        self.btn_sim_cleanup = ctk.CTkButton(
+            self.sim_confirm_frame, text="重试清理", height=32, width=118,
+            corner_radius=ui_tokens.RADIUS["button"],
+            fg_color=_PAIR["bad"], hover_color=_PAIR["bad"],
+            text_color=_PAIR["on_accent"],
+            font=self._font(ui_tokens.FONT_ROLES["meta"], "bold"),
+            command=lambda: self._cleanup_simulation(
+                stop=self.sim_launched and not self.sim_process_exited))
+        self.btn_sim_success.pack(side="left")
+        self.btn_sim_failure.pack(side="left", padx=(7, 0))
+        self.btn_sim_gameplay.pack(side="left", padx=(7, 0))
+        self.btn_sim_finish.pack(side="left", padx=(7, 0))
+        self.sim_confirm_frame.pack_forget()
+        self.btn_sim_cleanup.pack_forget()
 
         self.sim_stage_vars = {}
         self.sim_stage_labels = {}
@@ -1471,7 +1519,7 @@ class App(_OperationMixin):
                           ("confirm", "确认主菜单"), ("gameplay", "剧情场景验证")):
             var = tk.StringVar(value=name + "：等待")
             label = ctk.CTkLabel(
-                self.sim_card, textvariable=var, anchor="w",
+                self.sim_card, textvariable=var, anchor="w", wraplength=1, justify="left",
                 text_color=_PAIR["dim"],
                 font=self._font(ui_tokens.FONT_ROLES["meta"]))
             label.pack(anchor="w", pady=2)
@@ -1588,6 +1636,21 @@ class App(_OperationMixin):
             remove_button._rpykit_available = True
             self.library_action_buttons.extend(
                 (open_button, rename_button, remove_button))
+            launch_row = ctk.CTkFrame(body, fg_color="transparent")
+            launch_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(9, 0))
+            for text, command, enabled in (
+                    ("开始游戏", lambda item=entry: self.launch_library_game(item), available),
+                    ("开始汉化", lambda item=entry: self.start_translation(item), available),
+                    ("更换启动程序", lambda item=entry: self.change_library_launcher(item), available),
+                    ("本地文件夹", lambda item=entry: self.open_library_folder(item), os.path.isdir(entry["path"]))):
+                button = ctk.CTkButton(launch_row, text=text, width=96, height=32,
+                                      fg_color=_PAIR["panel_alt"], text_color=_PAIR["fg"],
+                                      hover_color=_PAIR["accent_soft"],
+                                      font=self._font(ui_tokens.FONT_ROLES["meta"]), command=command,
+                                      state="normal" if enabled else "disabled")
+                button.pack(side="left", padx=(0, 7))
+                button._rpykit_available = enabled
+                self.library_action_buttons.append(button)
         self._install_focus()
         self._apply_wrap()
         # A newly created card has no measured width yet.  Run once after the
@@ -1637,8 +1700,10 @@ class App(_OperationMixin):
             command=self.open_game_folder).pack(side="left", padx=(8, 0))
 
     def _build_log(self, parent):
-        body = ctk.CTkFrame(parent, fg_color="transparent")
+        body = ctk.CTkScrollableFrame(parent, fg_color="transparent")
         body.pack(fill="both", expand=True)
+        self.log_scroll = body
+        self._build_simulation_panel(body)
         tools = ctk.CTkFrame(body, fg_color="transparent")
         tools.pack(fill="x", pady=(0, 8))
         self.btn_clear_log = ctk.CTkButton(
@@ -1671,7 +1736,7 @@ class App(_OperationMixin):
             border_color=_PAIR["border"])
         self.log_card.pack(fill="both", expand=True)
         self.log = ctk.CTkTextbox(
-            self.log_card, wrap="none",
+            self.log_card, wrap="none", height=240,
             corner_radius=ui_tokens.RADIUS["button"],
             fg_color=_PAIR["panel"], text_color=_PAIR["fg"],
             font=ctk.CTkFont(family="Consolas",
@@ -1689,6 +1754,26 @@ class App(_OperationMixin):
     def _build_help(self, parent):
         body = ctk.CTkScrollableFrame(parent, fg_color="transparent")
         body.pack(fill="both", expand=True)
+        search = ctk.CTkFrame(body, fg_color="transparent")
+        search.pack(fill="x", pady=(0, 10))
+        self.var_help_query = tk.StringVar(value="")
+        self.entry_help_search = ctk.CTkEntry(search, textvariable=self.var_help_query,
+                                            placeholder_text="搜索帮助内容…", height=38,
+                                            fg_color=_PAIR["input"], text_color=_PAIR["fg"],
+                                            border_color=_PAIR["border_strong"], font=self._font())
+        self.entry_help_search.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(search, text="清空", width=65, height=38,
+                      fg_color=_PAIR["panel_alt"], text_color=_PAIR["fg"],
+                      command=lambda: self.var_help_query.set("")).pack(side="left", padx=(8, 0))
+        self.var_help_results = tk.StringVar(value="搜索标题、章节和正文；多个关键词用空格分开。")
+        ctk.CTkLabel(body, textvariable=self.var_help_results, anchor="w", wraplength=1,
+                     text_color=_PAIR["dim"], font=self._font()).pack(fill="x", pady=(0, 8))
+        self.help_result_frame = ctk.CTkFrame(body, fg_color="transparent", height=1)
+        self.help_result_frame.pack(fill="x")
+        self._help_search_job = None
+        self._help_results = []
+        self.var_help_query.trace_add("write", lambda *_: self._schedule_help_search())
+        self.entry_help_search.bind("<Escape>", self._clear_help_search)
         _, intro = self._card(body, padding=ui_tokens.SPACING[4])
         ctk.CTkLabel(
             intro, text="离线帮助", anchor="w", text_color=_PAIR["fg"],
@@ -1740,7 +1825,46 @@ class App(_OperationMixin):
         self._install_focus()
         self.root.after(50, self._apply_wrap)
 
-    def show_help(self, topic_id):
+    def _clear_help_search(self, _event=None):
+        self.var_help_query.set("")
+        return "break"
+
+    def _schedule_help_search(self):
+        if self._help_search_job is not None:
+            self.root.after_cancel(self._help_search_job)
+        self._help_search_job = self.root.after(150, self._render_help_search)
+
+    def _render_help_search(self):
+        self._help_search_job = None
+        if not self.help_result_frame.winfo_exists():
+            return
+        for child in self.help_result_frame.winfo_children():
+            child.destroy()
+        query = self.var_help_query.get().strip()
+        self._help_results = help_content.search(query)
+        if not query:
+            self.help_grid.pack(fill="x")
+            self.var_help_results.set("搜索标题、章节和正文；多个关键词用空格分开。")
+            self._layout_help_cards(self.page_host.winfo_width())
+            return
+        self.help_grid.pack_forget()
+        self.var_help_results.set("找到 %d 个主题" % len(self._help_results) if self._help_results else "没有找到匹配内容，请换个关键词。")
+        for item in self._help_results:
+            _, inner = self._card(self.help_result_frame)
+            ctk.CTkButton(inner, text=item["title"], anchor="w", height=34,
+                          fg_color=_PAIR["panel_alt"], text_color=_PAIR["fg"],
+                          command=lambda hit=item: self.show_help(hit["topic_id"], hit["section_index"])).pack(fill="x")
+            text = ((item["heading"] + " · ") if item["heading"] else "") + item["snippet"]
+            ctk.CTkLabel(inner, text=text, anchor="w", justify="left", wraplength=1,
+                         text_color=_PAIR["dim"], font=self._font()).pack(fill="x", pady=(6, 0))
+        self._install_focus()
+        self.root.after_idle(self._apply_wrap)
+
+    def focus_help_search(self):
+        self._show_page("help")
+        self.root.after_idle(lambda: self.entry_help_search.focus_set())
+
+    def show_help(self, topic_id, section_index=None):
         topic = help_content.topic_for(topic_id)
         if not topic:
             return
@@ -1769,12 +1893,15 @@ class App(_OperationMixin):
             wraplength=560, text_color=_PAIR["dim"],
             font=self._font(ui_tokens.FONT_ROLES["secondary"])).pack(
                 anchor="w", padx=6, pady=(0, 10))
-        for section in topic["sections"]:
-            ctk.CTkLabel(
+        target_heading = None
+        for index, section in enumerate(topic["sections"]):
+            heading = ctk.CTkLabel(
                 scroll, text=section["heading"], anchor="w",
-                text_color=_PAIR["fg"],
-                font=self._font(ui_tokens.FONT_ROLES["card_title"], "bold")).pack(
-                    anchor="w", padx=6, pady=(6, 2))
+                text_color=_PAIR["accent_text"] if index == section_index else _PAIR["fg"],
+                font=self._font(ui_tokens.FONT_ROLES["card_title"], "bold"))
+            heading.pack(anchor="w", padx=6, pady=(6, 2))
+            if index == section_index:
+                target_heading = heading
             for line in section["body"]:
                 ctk.CTkLabel(
                     scroll, text="• " + line, anchor="w", justify="left",
@@ -1794,10 +1921,18 @@ class App(_OperationMixin):
         window.protocol("WM_DELETE_WINDOW", window.destroy)
         window.grab_set()
         window.after(80, lambda: ui_focus.focus_target(close).focus_set())
+        if target_heading is not None:
+            def locate():
+                if window.winfo_exists():
+                    window.update_idletasks()
+                    scroll._parent_canvas.yview_moveto(
+                        target_heading.winfo_y() / max(1, scroll.winfo_reqheight()))
+            window.after(100, locate)
 
     def _build_settings(self, parent):
         body = ctk.CTkScrollableFrame(parent, fg_color="transparent")
         body.pack(fill="both", expand=True)
+        self._build_translation_settings(body, _PAIR)
         _, card = self._card(body, padding=ui_tokens.SPACING[4])
         ctk.CTkLabel(
             card, text="外观", anchor="w", text_color=_PAIR["fg"],
@@ -1914,6 +2049,7 @@ class App(_OperationMixin):
         self.root.bind("<Control-o>", lambda _event: self.pick())
         self.root.bind("<F5>", lambda _event: self.refresh_game())
         self.root.bind("<Control-l>", lambda _event: self._show_page("log"))
+        self.root.bind("<Control-f>", lambda _event: self.focus_help_search())
         self.root.bind("<Control-Return>", lambda _event: self.simulate_run())
         self.root.bind("<Escape>", lambda _event: self.root.focus_set())
 
@@ -2215,6 +2351,9 @@ class App(_OperationMixin):
             self._log(item)
             return
         event = item[0]
+        if event.startswith("__translation_"):
+            self._handle_translation_event(item)
+            return
         if event == "__scan_done__":
             self._scan_finished(*item[1:])
         elif event == "__done__":
@@ -2266,7 +2405,8 @@ class App(_OperationMixin):
                     "unknown", "ambiguous")
             except Exception:  # noqa: BLE001 - a bad path must not break callbacks
                 valid = False
-        locked = self.busy or self.sim_preparing or self.sim_session is not None
+        locked = (self.busy or self.sim_preparing or self.sim_session is not None
+                  or getattr(self, "_translation_host", None) is not None)
         selected = bool(self._ticked())
         can_work = valid and selected and not locked and not self.scan_busy
         for button, enabled in ((self.btn_go, can_work), (self.btn_dry, can_work),
@@ -2298,6 +2438,9 @@ class App(_OperationMixin):
         else:
             self.bar.stop()
             self.bar.grid_remove()
+            if getattr(self, "_translation_host", None) is not None:
+                self.var_global_status.set("实时汉化运行中")
+        self._translation_buttons()
         self._update_action_hint()
 
     def _show_log(self):
@@ -2318,7 +2461,8 @@ class App(_OperationMixin):
 
     def set_game_dir(self, game_dir, remember=True):
         target = os.path.abspath(os.fspath(game_dir)) if game_dir else None
-        if (self.busy or self.sim_preparing or self.sim_session is not None) and \
+        if (self.busy or self.sim_preparing or self.sim_session is not None
+                or getattr(self, "_translation_host", None) is not None) and \
                 target and self.game_dir and \
                 os.path.normcase(target) != os.path.normcase(self.game_dir):
             messagebox.showinfo(TITLE, "当前操作尚未结束，暂时不能切换游戏。")
@@ -2488,6 +2632,10 @@ class App(_OperationMixin):
             self.var_global_status.set("设置未能保存：%s" % exc)
 
     def _destroy_root(self):
+        host = getattr(self, "_translation_host", None)
+        if host is not None:
+            host.stop()
+            self._translation_host = None
         if self._geometry_job is not None:
             try:
                 self.root.after_cancel(self._geometry_job)

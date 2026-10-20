@@ -91,6 +91,8 @@ def _support():
             "supported": False, "mechanism": None,
             "reasons": ["Custom image/replay lock logic needs a dedicated adapter."],
         },
+        "translation": {"supported": True, "mechanism": "renpy_live_bridge",
+                        "reasons": ["合成界面样本，不代表当前游戏通过运行验收。"]},
     }
 
 
