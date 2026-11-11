@@ -127,7 +127,7 @@ def test_topic_order_and_key_set_are_stable():
 def test_translation_explains_session_provider_and_preservation_limits():
     text = _all_text(help_content.topic_for("translation"))
     for required in ("2 秒", "0 到 30", "Google", "DPAPI", "auto", "zh-CN",
-                     "迟到", "预测", "NVL", "8.3 / 8.4", "原文", "缓存",
+                     "迟到", "预测", "NVL", "8.5.2", "测试连接", "原文", "缓存",
                      "不自动转用收费 AI", "普通双击", "停止汉化"):
         assert required in text, required
 

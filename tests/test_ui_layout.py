@@ -131,9 +131,21 @@ def test_library_recognises_rpgmaker_without_fake_unavailable(ui_app, tmp_path):
     (mv / "www" / "js").mkdir(parents=True)
     (mv / "www" / "js" / "rpg_core.js").write_text(
         "Utils.RPGMAKER_VERSION = '1.6.2';", encoding="utf-8")
-    level, status = app._library_status(str(mv))
-    assert level == "supported"
+    engine_id, status = app._library_status(str(mv))
+    assert engine_id == "rpgmaker_mv"
     assert "RPG Maker MV" in status
+
+
+def test_unknown_engine_library_enables_only_normal_game_actions(ui_app, tmp_path):
+    app, _root, _game = ui_app
+    unknown = tmp_path / "Generic Game"
+    unknown.mkdir()
+    app.state["games"] = [{"path": str(unknown), "name": "通用游戏"}]
+    app._render_library()
+    app._set_buttons()
+    actions = {button.cget("text"): button.cget("state") for button in app.library_action_buttons}
+    assert actions["开始游戏"] == actions["本地文件夹"] == "normal"
+    assert actions["检查并汉化"] == actions["打开处理页"] == "disabled"
 
 
 def test_offline_library_entry_stays_visible_unavailable(ui_app, tmp_path):

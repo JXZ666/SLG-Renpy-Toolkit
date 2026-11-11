@@ -621,7 +621,9 @@ def prepare(game_dir, feature_ids, log_callback=None):
         args.features = selected
         try:
             with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(captured):
-                engine_adapters.run(args)
+                code = engine_adapters.run(args)
+                if code:
+                    raise RuntimeError("patch installer returned exit code %s" % code)
         except BaseException as exc:
             # SystemExit is used by the CLI runner for a refused operation;
             # KeyboardInterrupt from the host should propagate after cleanup.

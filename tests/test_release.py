@@ -14,8 +14,8 @@ from tools.write_version_info import render_version_info
 
 def test_version_is_single_release_constant():
     assert branding.APP_VERSION == "1.3.0"
-    assert branding.APP_CHANNEL == "local-test"
-    assert branding.CHANNEL_LABEL == "测试版"
+    assert branding.APP_CHANNEL == "stable"
+    assert branding.CHANNEL_LABEL == "正式版"
 
 
 def test_cli_version(capsys):
@@ -23,7 +23,7 @@ def test_cli_version(capsys):
         app_main.main(["--version"])
     except SystemExit as exc:
         assert exc.code == 0
-    assert capsys.readouterr().out.strip() == "SLG-Renpy-Toolkit 1.3.0 (local-test)"
+    assert capsys.readouterr().out.strip() == "SLG-Renpy-Toolkit 1.3.0 (stable)"
 
 
 def test_cli_without_game_prints_help_instead_of_opening_gui(capsys, monkeypatch):
@@ -50,8 +50,8 @@ def test_version_resource_has_numeric_and_string_version_fields():
     assert "StringStruct('FileVersion', '1.3.0')" in resource
     assert "StringStruct('ProductVersion', '1.3.0')" in resource
     assert "StringStruct('OriginalFilename', 'SLG-Renpy-Toolkit-CLI.exe')" in resource
-    assert "flags=0x2" in resource
-    assert "SLG-Renpy-Toolkit (local-test)" in resource
+    assert "flags=0x0" in resource
+    assert "SLG-Renpy-Toolkit (stable)" in resource
 
 
 def test_test_channel_sets_windows_prerelease_flag(monkeypatch):

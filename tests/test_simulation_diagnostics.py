@@ -13,6 +13,17 @@ def session(tmp_path):
     return simulation.SimulationSession(str(tmp_path), str(staged), str(tmp_path / "work"), [], [])
 
 
+def test_failed_patch_exit_code_discards_trial_copy(tmp_path, monkeypatch):
+    from test_simulation import make_game
+
+    source = make_game(str(tmp_path / "original"))
+    monkeypatch.setattr(simulation.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(simulation.engine_adapters, "run", lambda _args: 1)
+    with pytest.raises(simulation.SimulationError, match="exit code 1"):
+        simulation.prepare(source, ["fontfix"])
+    assert not list(tmp_path.glob("rpykit-simulation-*"))
+
+
 def test_unchanged_historical_traceback_is_ignored(tmp_path):
     s = session(tmp_path)
     error = Path(s.staged_dir, "traceback.txt")

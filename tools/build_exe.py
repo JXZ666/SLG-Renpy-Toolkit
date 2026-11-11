@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 import subprocess
 import sys
@@ -23,6 +24,31 @@ TARGETS = (
 
 BUILD_MODES = ("onedir", "onefile")
 DEFAULT_BUILD_MODE = "both"
+
+
+def check_build_dependencies(requirements: Path) -> bool:
+    """Check the pinned build environment without installing anything."""
+    try:
+        from packaging.requirements import Requirement
+
+        lines = requirements.read_text(encoding="utf-8").splitlines()
+        pins = [Requirement(line) for line in lines
+                if line.strip() and not line.lstrip().startswith("#")]
+    except (ImportError, OSError, ValueError) as exc:
+        print("Build dependency check failed: %s" % type(exc).__name__)
+        return False
+    mismatches = []
+    for pin in pins:
+        try:
+            installed = version(pin.name)
+        except PackageNotFoundError:
+            installed = None
+        if installed is None or not pin.specifier.contains(installed, prereleases=True):
+            mismatches.append("%s: expected %s, found %s" %
+                              (pin.name, pin.specifier, installed or "not installed"))
+    if mismatches:
+        print("\n".join(mismatches))
+    return not mismatches
 
 
 def selected_modes(build_mode: str):
@@ -62,6 +88,7 @@ def _compile_targets(output_dir: Path, build_mode: str) -> int:
                     render_version_info(exe_name), encoding="utf-8", newline="\n"
                 )
                 env[env_key] = str(version_file)
+                env["RPYKIT_BUNDLE_NOTICE_FILE"] = str(temp_dir / (exe_name + "." + mode + ".licenses.txt"))
                 # One work dir per spec *and* mode, or the two builds collide.
                 work_dir = temp_dir / (Path(spec_name).stem + "-" + mode + "-work")
                 command = [
@@ -121,6 +148,9 @@ def main(argv=None) -> int:
              "overwriting the other (default: both)",
     )
     args = parser.parse_args(argv)
+    if not check_build_dependencies(ROOT / "requirements-build.txt"):
+        print("Use a build environment matching requirements-build.txt.")
+        return 1
     return build(Path(args.output_dir), args.mode)
 
 

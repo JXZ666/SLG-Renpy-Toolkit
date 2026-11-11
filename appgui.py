@@ -255,10 +255,10 @@ class _OperationMixin:
                 continue
             self._set_sim_stage(stage_id, step.get("status"), step.get("message"))
 
-    def simulate_run(self):
+    def simulate_run(self, feature_ids=None):
         if self.busy or self.sim_session is not None or getattr(self, "_translation_host", None) is not None:
             return
-        feature_ids = self._ticked()
+        feature_ids = self._ticked() if feature_ids is None else list(feature_ids)
         if not feature_ids:
             messagebox.showinfo(
                 TITLE, "\u8bf7\u5148\u52fe\u9009\u81f3\u5c11\u4e00\u4e2a\u53ef\u7528\u529f\u80fd\u3002")
@@ -288,6 +288,7 @@ class _OperationMixin:
             import uuid
             self._translation_id = uuid.uuid4().hex
             self._translation_game = self.game_dir
+            self._translation_status = self._translation_wait_status(self._sim_translation_settings)
         self._show_log()
 
         game_dir = self.game_dir
@@ -397,11 +398,14 @@ class _OperationMixin:
 
     def _simulation_launch_worker(self, session, rel_launcher):
         host = None
+        failure_hint = None
         try:
             settings = getattr(self, "_sim_translation_settings", None)
             if settings is not None:
+                failure_hint = "本机翻译服务未能启动。请检查翻译设置和本地存储权限。"
                 host = self._new_translation_host(settings, self._translation_game, self._translation_id)
                 self._translation_host = host
+                failure_hint = "无法启动副本中的游戏。请检查所选启动程序和运行日志。"
                 process = session.launch(rel_launcher, environment=host.environment())
             else:
                 process = session.launch(rel_launcher)
@@ -412,7 +416,7 @@ class _OperationMixin:
             if host is not None:
                 host.stop()
                 self._translation_host = None
-            self.queue.put(("__sim_launch_failed__", "%s: %s" % (type(exc).__name__, exc)))
+            self.queue.put(("__sim_launch_failed__", failure_hint or "%s: %s" % (type(exc).__name__, exc)))
 
     def _simulation_launched(self, _process):
         self.busy = False
@@ -478,11 +482,14 @@ class _OperationMixin:
             self._cleanup_simulation(stop=False)
             return
         if code == 0 and not self.sim_confirmed:
+            self._stop_simulation_translation()
+            self.var_global_status.set("副本已退出，等待确认")
             self._set_sim_stage(
                 "launch", "pending_confirmation",
                 "进程已正常退出；是否进入主菜单仍需你确认")
             self._set_sim_result(
                 "warn", "\u8fdb\u7a0b\u5df2\u9000\u51fa\uff08\u9000\u51fa\u7801 0\uff09\uff0c\u4ecd\u9700\u4f60\u786e\u8ba4\u662f\u5426\u8fdb\u5165\u4e3b\u83dc\u5355\u3002")
+            self._set_buttons()
             return
         if code == 0 and self.sim_confirmed:
             self._set_sim_stage(
@@ -585,13 +592,17 @@ class _OperationMixin:
         self.sim_confirm_frame.pack_forget()
         self._cleanup_simulation(stop=not self.sim_process_exited)
 
-    def _cleanup_simulation(self, stop=False, close_after=False):
-        session = self.sim_session
-        host = getattr(self, "_translation_host", None)
-        if host is not None and getattr(self, "_sim_translation_requested", False):
-            host.stop()
+    def _stop_simulation_translation(self):
+        if getattr(self, "_sim_translation_requested", False):
+            host = getattr(self, "_translation_host", None)
             self._translation_host = None
             self._translation_id = None
+            if host is not None:
+                host.stop()
+
+    def _cleanup_simulation(self, stop=False, close_after=False):
+        session = self.sim_session
+        self._stop_simulation_translation()
         if session is None:
             if close_after:
                 self._destroy_root()
@@ -1552,17 +1563,19 @@ class App(TranslationUIMixin, _OperationMixin):
 
     def _library_status(self, path):
         if not os.path.isdir(path):
-            return "unsupported", "路径不可用"
+            return "unavailable", "路径不可用"
         try:
             engine = engine_adapters.detect(path)
         except Exception:  # noqa: BLE001 - one bad bookmark must not break the page
-            return "unsupported", "不可访问"
-        if engine["id"] in ("unknown", "ambiguous"):
-            return "unsupported", "未识别"
+            return "unknown", "引擎检查失败 · 仅普通启动"
+        if engine["id"] == "unknown":
+            return "unknown", "未识别引擎 · 仅普通启动"
+        if engine["id"] == "ambiguous":
+            return "ambiguous", "引擎未确认 · 仅普通启动"
         name = {"rpgmaker_mv": "RPG Maker MV",
                 "rpgmaker_mz": "RPG Maker MZ"}.get(engine["id"], "Ren'Py")
         version = engine.get("version")
-        return "supported", name + (" " + version if version else "")
+        return engine["id"], name + (" " + version if version else "")
 
     def _render_library(self):
         if hasattr(self, "library_action_buttons"):
@@ -1576,7 +1589,7 @@ class App(TranslationUIMixin, _OperationMixin):
                 font=self._font(ui_tokens.FONT_ROLES["section"], "bold")).pack(
                     anchor="w")
             ctk.CTkLabel(
-                body, text="点击上方“添加游戏…”，选择一个包含 game/ 与引擎文件的根目录。",
+                body, text="点击上方“添加游戏…”，选择游戏所在文件夹。首次启动时选择该目录内的 exe。",
                 anchor="w", justify="left", wraplength=1, text_color=_PAIR["dim"],
                 font=self._font(ui_tokens.FONT_ROLES["secondary"])).pack(
                     anchor="w", pady=(6, 0))
@@ -1584,8 +1597,10 @@ class App(TranslationUIMixin, _OperationMixin):
             self._apply_wrap()
             return
         for entry in self.state["games"]:
-            level, status = self._library_status(entry["path"])
-            available = level == "supported"
+            engine_id, status = self._library_status(entry["path"])
+            available = engine_id != "unavailable"
+            can_process = engine_id in ("renpy", "rpgmaker_mv", "rpgmaker_mz")
+            status_color = "ok" if can_process else "dim" if available else "bad"
             _, body = self._card(self.library_scroll, padding=ui_tokens.SPACING[2])
             body.grid_columnconfigure(0, weight=1)
             ctk.CTkLabel(
@@ -1593,7 +1608,7 @@ class App(TranslationUIMixin, _OperationMixin):
                 font=self._font(ui_tokens.FONT_ROLES["card_title"], "bold")).grid(
                     row=0, column=0, sticky="w")
             ctk.CTkLabel(
-                body, text=status, text_color=_PAIR["ok"] if available else _PAIR["bad"],
+                body, text=status, text_color=_PAIR[status_color],
                 font=self._font(ui_tokens.FONT_ROLES["meta"])).grid(
                     row=0, column=1, sticky="e", padx=(8, 0))
             ctk.CTkLabel(
@@ -1610,7 +1625,7 @@ class App(TranslationUIMixin, _OperationMixin):
                 text_color=_PAIR["on_accent"], border_width=2,
                 border_color=_PAIR["accent_fill"],
                 font=self._font(ui_tokens.FONT_ROLES["meta"], "bold"),
-                state="normal" if available else "disabled",
+                state="normal" if can_process else "disabled",
                 command=lambda path=entry["path"]: self.open_library_game(path))
             open_button.pack(side="left")
             rename_button = ctk.CTkButton(
@@ -1631,7 +1646,7 @@ class App(TranslationUIMixin, _OperationMixin):
                 font=self._font(ui_tokens.FONT_ROLES["meta"]),
                 command=lambda path=entry["path"]: self.remove_game(path))
             remove_button.pack(side="right")
-            open_button._rpykit_available = available
+            open_button._rpykit_available = can_process
             rename_button._rpykit_available = True
             remove_button._rpykit_available = True
             self.library_action_buttons.extend(
@@ -1640,7 +1655,7 @@ class App(TranslationUIMixin, _OperationMixin):
             launch_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(9, 0))
             for text, command, enabled in (
                     ("开始游戏", lambda item=entry: self.launch_library_game(item), available),
-                    ("开始汉化", lambda item=entry: self.start_translation(item), available),
+                    ("检查并汉化", lambda item=entry: self.start_translation(item), engine_id == "renpy"),
                     ("更换启动程序", lambda item=entry: self.change_library_launcher(item), available),
                     ("本地文件夹", lambda item=entry: self.open_library_folder(item), os.path.isdir(entry["path"]))):
                 button = ctk.CTkButton(launch_row, text=text, width=96, height=32,
@@ -2286,6 +2301,8 @@ class App(TranslationUIMixin, _OperationMixin):
             self._paint_chips(None)
             self.var_toolbox_info.set("目录中未找到支持的游戏引擎。")
             self.var_toolbox_installed.set("")
+            if os.path.isdir(path):
+                return self._set_state("info", "该目录可在游戏库中普通启动。补丁需要可识别的引擎。")
             return self._set_state("bad", "请选择 Ren’Py 或 RPG Maker MV/MZ 游戏根目录。")
         self.scan_busy = True
         self.scan_failed = False
@@ -2415,7 +2432,8 @@ class App(TranslationUIMixin, _OperationMixin):
                                 (self.btn_add_game, not locked)):
             button.configure(state="normal" if enabled else "disabled")
         for row in self.rows.values():
-            row.toggle.configure(state="normal" if not locked and row.supported else "disabled")
+            can_select = not self.game_dir or (valid and not self.scan_busy)
+            row.toggle.configure(state="normal" if can_select and not locked and row.supported else "disabled")
         for button in getattr(self, "library_action_buttons", ()):
             enabled = not locked and getattr(button, "_rpykit_available", True)
             button.configure(state="normal" if enabled else "disabled")
@@ -2439,7 +2457,7 @@ class App(TranslationUIMixin, _OperationMixin):
             self.bar.stop()
             self.bar.grid_remove()
             if getattr(self, "_translation_host", None) is not None:
-                self.var_global_status.set("实时汉化运行中")
+                self.var_global_status.set(getattr(self, "_translation_status", None) or "实时汉化运行中")
         self._translation_buttons()
         self._update_action_hint()
 
@@ -2467,6 +2485,8 @@ class App(TranslationUIMixin, _OperationMixin):
                 os.path.normcase(target) != os.path.normcase(self.game_dir):
             messagebox.showinfo(TITLE, "当前操作尚未结束，暂时不能切换游戏。")
             return
+        if os.path.normcase(target or "") != os.path.normcase(self.game_dir or ""):
+            self._invalidate_translation_probe()
         self.game_dir = target
         self.var_dir.set(self.game_dir or "")
         if self.game_dir and remember:
@@ -2494,7 +2514,8 @@ class App(TranslationUIMixin, _OperationMixin):
         self._persist_state()
         self._render_library()
         self.set_game_dir(chosen, remember=False)
-        self._show_page("process")
+        engine_id, _ = self._library_status(chosen)
+        self._show_page("process" if engine_id in ("renpy", "rpgmaker_mv", "rpgmaker_mz") else "library")
 
     def rename_game(self, entry):
         name = simpledialog.askstring("重命名游戏", "显示名称：", initialvalue=entry["name"],
@@ -2517,6 +2538,7 @@ class App(TranslationUIMixin, _OperationMixin):
         self._render_library()
         if self.game_dir and os.path.normcase(os.path.realpath(self.game_dir)) == \
                 os.path.normcase(os.path.realpath(path)):
+            self._invalidate_translation_probe()
             self.game_dir = None
             self.var_dir.set("")
             self._refresh_state()
@@ -2632,6 +2654,7 @@ class App(TranslationUIMixin, _OperationMixin):
             self.var_global_status.set("设置未能保存：%s" % exc)
 
     def _destroy_root(self):
+        self._invalidate_translation_probe(closing=True)
         host = getattr(self, "_translation_host", None)
         if host is not None:
             host.stop()

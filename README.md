@@ -1,6 +1,6 @@
 # SLG-Renpy神奇妙妙工具 · SLG-Renpy-Toolkit
 
-给游戏安装可选择、可撤销的小补丁。**1.3.0 本地测试版增加实时游戏内汉化、离线帮助检索、游戏库快捷启动与文件夹入口，并将完整模拟操作区移入运行日志。默认仍只安装字体补丁**。其余功能需主动选择，并以目标游戏的预检范围为准。1.2.0 正式版稳定原有四项功能，包含撤销、回滚及界面状态修复。
+在 Windows 上为游戏安装可撤销补丁、实时翻译对白和管理启动入口。**1.3.0 正式版扩大 Ren’Py 汉化覆盖，增加连接测试和失败诊断，支持普通游戏入库启动。** 默认选中字体补丁，其余功能由用户选择。处理页会显示所选游戏的实际支持范围。
 
 | 功能 ID | 默认 | 当前范围 |
 |---|---|---|
@@ -30,17 +30,21 @@
 
 ## 实时汉化与游戏库
 
-1.3 连接补丁只对已审核的 Ren'Py 8.3 / 8.4 接口提供试验支持，覆盖对白和标准 ADV 选项；NVL、自定义菜单及未验证版本保留原文。只有当前文本实际执行时才请求，预测阶段不联网，不启动前批量预译。
+实时汉化支持通过审核的 Ren’Py **8.3.0、8.3.6、8.4.1、8.4.2、8.5.0、8.5.2** 构建。兼容判断依据引擎指纹，预检分别说明对白和常规选项的覆盖。支持有可读源码且只调整静态外观的常规菜单。NVL、仅编译菜单、自定义逻辑菜单及未审核构建保留原文。游戏实际执行受支持的文本时才请求翻译。
 
 默认免费 Google 无 Key 试验通道可能变更、限流或失效；失败时显示原因并保留原文，不自动转用收费 AI。也可自填 AI 接口地址、模型和 Key，费用由所选服务商决定。默认不记忆 Key；主动记忆时使用 Windows DPAPI 加密。游戏只连接带随机会话凭据的本机代理，Key 和外网请求留在工具侧。
 
+启动前可在设置页点击“测试连接”。它只发送固定测试句，显示耗时和失败原因。开始汉化后，运行日志会区分等待游戏文本、网络或授权错误、限流、超时及译文格式问题。
+
 默认源语言 `auto`、目标语言 `zh-CN`，最多等待 2 秒，可调 0–30 秒（0 秒暂停请求并显示原文）；一组菜单共享预算。超时保留原文，迟到结果只缓存，不改写已显示的句子。保留标签、变量占位符及选项行为。内置汉化与外部 Luna 内嵌互斥，请先在隔离副本试用。
 
-可以向原游戏安装可撤销连接补丁，它不含译文或 Key。普通双击游戏显示原文；从工具“开始汉化”才启用本次会话。停止汉化或关闭工具让原游戏继续运行并回退原文；模拟副本仍需按日志页操作结束与清理。
+游戏库的“检查并汉化”通过预检后启用本次会话，所需连接补丁可以撤销。普通双击游戏显示原文。停止汉化或关闭工具后，正常游戏继续运行并回退原文。模拟副本在运行日志页结束和清理。
 
 游戏库每个条目首次启动都需手动选择目录内的 exe，即使只有一个候选。支持子目录，保存相对路径；取消不启动，文件失效后重新选择，也可“更换启动程序”。“开始游戏”的工作目录为 exe 所在目录，关闭工具不结束正常游戏。“打开文件夹”直接打开该条目的本地目录，离线时明确提示。
 
-1.3 测试版与 1.2 正式版使用独立界面配置，首次只读导入书签和外观；两版共用账本与备份，通过最低可写工具版本保护，旧版遇到新版功能会拒绝修改并提示使用新版撤销。
+其他 Windows 游戏也可手动加入游戏库，使用普通启动和文件夹入口。补丁及汉化依照引擎预检开放。
+
+1.3 正式版首次合并旧正式版与测试版游戏库，重复游戏优先采用测试版的有效配置。书签、离线条目和启动 exe 会迁入独立的 `ui_state.v3.json`，两份原配置保留。翻译设置、缓存和安装账本继续共用。撤销含新版功能的补丁时，请使用符合账本版本要求的工具。
 
 ## 命令行
 
@@ -111,7 +115,7 @@ python -m pytest tests -q
 python tools/check_privacy.py
 ```
 
-源码要求 Python 3.9+，GUI 依赖 tkinter / CustomTkinter。测试涵盖路由、安装 / 撤销事务、运行兼容、画廊资格、模拟异常和发布 provenance；关键回归含内存变异测试，验证错误实现能使测试失败。真实游戏与构建后的 exe 必须另行在副本上验证，不能用源码测试数量代替。
+源码要求 Python 3.11+，GUI 依赖 tkinter / CustomTkinter。测试涵盖路由、安装 / 撤销事务、运行兼容、画廊资格、模拟异常、汉化和构建清单。真实游戏与构建后的 exe 单独在副本上验证。
 
 ```bat
 python -m venv .venv-build
@@ -121,24 +125,22 @@ python -m pip check
 build_exe.bat
 ```
 
-构建依赖固定在 `requirements-build.txt`；构建脚本校验版本，不自动升级。产物按 `release/<version>/<channel>/` 分开保存：1.2.0 正式版使用 `stable`，1.3.0 本地测试版使用 `local-test`，单文件 GUI / CLI 位于 `onefile/` 子目录；onedir 版须连同 `_internal` 保留。需要指定形态时使用 `python tools/build_exe.py --mode onefile` 或 `--mode onedir`。
+构建入口按 `requirements-build.txt` 校验依赖版本。产物按 `release/<version>/<channel>/` 保存，1.3.0 正式版使用 `stable`。单文件 GUI / CLI 位于 `onefile/` 子目录，onedir 版须连同 `_internal` 保留。使用 `python tools/build_exe.py --mode onefile` 或 `--mode onedir` 指定形态。
 
 `build_manifest.json` 记录版本、渠道、构建输入哈希、Git 基准、构建状态和产物哈希。正式版使用 `stable`，本地测试版使用 `local-test`；两者均要求已提交且干净的 Git 源码。构建期间输入或 Git 身份变化、exe 缺失或哈希不匹配会使验证失败；显示版本号不能单独证明 exe 来自当前源码。输入覆盖嵌套 Python 包、测试、运行时 JS/JSON 和资源，排除输出、虚拟环境与用户配置。
-
-1.2.0 正式版以现有四项功能稳定化为范围。此前路线图中的完整适配器契约、可跨进程恢复的崩溃事务、字体子集化仍未完成，已延期；它们不因正式版名称而视为已实现。1.3.0 实时汉化使用独立本地测试渠道，不计入 1.2 正式版。
 
 ## 验证边界
 
 Windows 为当前验证平台；Linux / macOS 未验证。静态预检不能替代菜单、存档、中文渲染与剧情场景测试。MV / MZ 已有脚本行为和字体回退验证，但完整 NW.js 游戏流程仍需单独验收。真实 Luna 客户端全流程、所有回放场景及其他自定义图鉴机制尚未完整实测。
 
-开发交接、历史事故和验证纪律见 [HANDOFF.md](HANDOFF.md)；变化见 [1.2.0 正式版说明](release_notes/1.2.0.md)及 [1.3.0 本地测试版说明](release_notes/1.3.0-test.md)，功能说明见 [帮助文档](docs/HELP.md)，界面规则见 [UI 审计](docs/UI_AUDIT.md) 与 [UI 系统](docs/UI_SYSTEM.md)。
+开发交接见 [HANDOFF.md](HANDOFF.md)，本次变化见 [1.3.0 正式版说明](release_notes/1.3.0.md)，详细操作见 [帮助文档](docs/HELP.md)。
 
 ## English
 
-Version 1.3.0 is a local test release with optional live translation, offline Help search, explicit game launcher selection and local-folder actions. Simulation controls are in the Run Log. Reviewed Ren'Py 8.3 / 8.4 dialogue and standard ADV choices use a shared default two-second deadline; timeouts keep the original text. Free translation never automatically falls back to paid AI. Ordinary launches stay untranslated; live sessions are started through the tool. The stable 1.2.0 release retains the original four patch features with revert and interface fixes. Font fixes remain the only default selection, and MV / MZ currently implement font fallback only.
+Version 1.3.0 adds live translation for reviewed Ren'Py 8.3–8.5 builds, a connection test and clearer error messages. The game library can launch other Windows games using an executable selected by the user. A live session starts from the toolkit after compatibility checks. Translation timeouts keep the original text. The free provider never automatically switches to paid AI. The Run Log contains the simulation controls. RPG Maker MV/MZ supports font fallback.
 
 Simulation installs into a temporary copy with isolated saves. Menu confirmation and gameplay confirmation are separate, and newly observed errors invalidate the test. Runtime qualification is not a promise that every scene or an external translation client has been tested. Changes are recorded for safe revert; ordinary gameplay progress is retained.
 
 ## 许可
 
-代码采用 [MIT](LICENSE)。`assets/NotoSansSC-VF.ttf` 采用 SIL Open Font License 1.1，全文见 [OFL.txt](assets/OFL.txt)。本工具不包含游戏内容或翻译文本，请支持正版游戏。
+代码采用 [MIT](LICENSE)。Noto Sans SC 采用 [SIL Open Font License 1.1](assets/OFL.txt)。Windows 包内及 Release 附件均提供实际打包组件的许可材料。本工具不包含游戏内容或翻译文本。

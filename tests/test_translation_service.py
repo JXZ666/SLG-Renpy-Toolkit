@@ -114,6 +114,22 @@ def test_ipc_success_and_environment_only_contains_session_credentials(host_fact
     assert send(host)[1]["statuses"] == ["cached"]
 
 
+def test_first_authenticated_game_request_reports_text_once(host_factory):
+    events = []
+    host = host_factory(FakeProvider(), callback=events.append)
+    assert send(host, auth=False)[0] == 403
+    assert send(host, {"game_id": "another-game"})[0] == 403
+    assert status_request(host) == (200, {"ok": True})
+    assert not any(item["status"] == "received_text" for item in events)
+
+    assert send(host, {"texts": ["private fixture line"]})[0] == 200
+    assert send(host)[0] == 200
+    first_text = [item for item in events if item["status"] == "received_text"]
+    assert first_text == [{"session_id": host.session_id, "game_id": host.game_id,
+                           "status": "received_text", "count": 0}]
+    assert "private fixture line" not in str(events)
+
+
 def test_token_protection_and_unsafe_results(host_factory):
     provider = FakeProvider()
     host = host_factory(provider)
@@ -367,3 +383,48 @@ def test_redirect_does_not_forward_ai_authorization(host_factory):
                                           "ai_model": "fixture", "api_key": "fixture-key"})
             assert host.translate_batch(["Hello"])["statuses"] == ["http_error"]
             assert target_calls == []
+
+
+def test_google_connection_probe_sends_fixed_text_without_creating_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    with upstream([[["你好，世界。", "Hello, world.", None, None]], None, "en"]) as (url, calls):
+        monkeypatch.setattr(service, "GOOGLE_URL", url)
+        result = service.probe_provider({"provider": "google", "wait_seconds": 0})
+    assert len(calls) == 1
+    assert parse.parse_qs(parse.urlsplit(calls[0][0]).query)["q"] == ["Hello, world."]
+    assert set(result) == {"status", "elapsed_ms"}
+    assert result["status"] == "success" and result["elapsed_ms"] >= 0
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("http_status,reply,expected", [
+    (200, "你好，世界。", "success"),
+    (200, "你好 {p}", "unsafe"),
+    (401, "private response body", "auth_error"),
+    (429, "private response body", "rate_limited"),
+])
+def test_ai_connection_probe_status_and_selected_credentials(http_status, reply, expected):
+    response = {"choices": [{"message": {"content": reply}}]}
+    with upstream(response, status=http_status) as (url, calls):
+        result = service.probe_provider({"provider": "ai", "ai_endpoint": url + "/v1",
+                                         "ai_model": "fixture", "api_key": "fixture-key"})
+    assert len(calls) == 1
+    path, headers, raw = calls[0]
+    assert path == "/v1/chat/completions"
+    assert headers["Authorization"] == "Bearer fixture-key"
+    assert json.loads(raw)["messages"][1]["content"] == "Hello, world."
+    assert set(result) == {"status", "elapsed_ms"} and result["status"] == expected
+    assert "fixture-key" not in str(result) and reply not in str(result)
+
+
+def test_connection_probe_distinguishes_timeout_from_network_failure(monkeypatch):
+    with upstream(delay=0.2) as (url, _):
+        monkeypatch.setattr(service, "GOOGLE_URL", url)
+        assert service.probe_provider({}, timeout=0.04)["status"] == "timeout"
+
+    def offline(*args, **kwargs):
+        raise error.URLError("private network details")
+    monkeypatch.setattr(service.request.OpenerDirector, "open", offline)
+    result = service.probe_provider({})
+    assert result["status"] == "network_error"
+    assert "private network details" not in str(result)

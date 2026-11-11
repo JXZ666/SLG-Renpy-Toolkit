@@ -234,9 +234,17 @@ def test_recursive_package_and_runtime_resource_inputs_exclude_local_state(tmp_p
 def test_default_output_is_channel_specific(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(build_exe, "ROOT", tmp_path)
+    monkeypatch.setattr(build_exe, "check_build_dependencies", lambda _: True)
     monkeypatch.setattr(build_exe, "build", lambda path, mode: calls.append((path, mode)) or 0)
     assert build_exe.main(["--mode", "onefile"]) == 0
-    assert calls == [(tmp_path / "release" / "1.3.0" / "local-test", "onefile")]
+    assert calls == [(tmp_path / "release" / "1.3.0" / "stable", "onefile")]
+
+
+def test_direct_build_entry_rejects_mismatched_dependencies(monkeypatch, tmp_path):
+    monkeypatch.setattr(build_exe, "ROOT", tmp_path)
+    (tmp_path / "requirements-build.txt").write_text("packaging==999.0\n", encoding="utf-8")
+    monkeypatch.setattr(build_exe, "build", lambda *args: pytest.fail("started a mismatched build"))
+    assert build_exe.main(["--mode", "onefile"]) == 1
 
 
 def test_custom_ignored_output_inside_source_does_not_hash_its_manifest(tmp_path):

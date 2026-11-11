@@ -80,6 +80,21 @@ def test_library_open_selects_game_and_opens_process_page(ui_app):
     show.assert_called_once_with("process")
 
 
+def test_exited_translation_copy_disconnects_while_waiting_for_confirmation():
+    app = controller()
+    app.sim_session = mock.Mock(runtime_errors=[])
+    app.sim_session.poll.return_value = 0
+    app.sim_launched = app._sim_translation_requested = True
+    app._translation_id = "active"
+    host = app._translation_host = mock.Mock()
+    app._poll_simulation()
+    host.stop.assert_called_once()
+    assert app._translation_host is None and app._translation_id is None
+    assert app.sim_process_exited and app.sim_session is not None
+    assert app.var_global_status.get() == "副本已退出，等待确认"
+    app._cleanup_simulation.assert_not_called()
+
+
 def test_release_channel_uses_shared_branding(ui_app):
     app, _root, _game = ui_app
     assert app.channel_label.cget("text") == appgui.branding.CHANNEL_LABEL

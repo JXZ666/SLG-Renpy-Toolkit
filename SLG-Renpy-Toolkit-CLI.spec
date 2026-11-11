@@ -3,6 +3,7 @@
 
 import os
 from PyInstaller.utils.hooks import collect_submodules
+from tools.build_notices import bundle_notices
 
 version_file = os.environ.get("RPYKIT_CLI_VERSION_FILE")
 if not version_file or not os.path.isfile(version_file):
@@ -24,6 +25,7 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+bundle_notices(a, os.environ["RPYKIT_BUNDLE_NOTICE_FILE"])
 pyz = PYZ(a.pure)
 
 build_mode = (os.environ.get("RPYKIT_BUILD_MODE") or "onedir").strip().lower()

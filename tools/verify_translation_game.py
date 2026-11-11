@@ -27,9 +27,14 @@ SCREENS = '''screen say(who, what):
 screen choice(items):
     style_prefix "choice"
 
-    vbox:
-        for i in items:
-            textbutton i.caption action i.action
+    frame align (0.5, 0.5):
+        padding (10, 6)
+        vbox:
+            spacing 8
+            for i in items:
+                textbutton i.caption action i.action text_size 24:
+                    text_font "DejaVuSans.ttf"
+                    xsize 280
 '''
 
 PROBE = r'''
@@ -45,6 +50,7 @@ init -10 python:
     config.autosave_on_choice = False
     config.autosave_on_quit = False
     config.autosave_frequency = 0
+    config.skip_delay = 50
     config.say_menu_text_filter = lambda text: text.replace("GreetingsToken", "HelloToken")
 
 init 1000 python hide:
@@ -52,8 +58,10 @@ init 1000 python hide:
     import sys
     probe = sys.modules["_rpykit_translation_runtime_v1"]
     probe._probe_seen = []
+    probe._probe_choices = []
     probe._probe_loaded = False
     probe._probe_rolled_back = False
+    probe._probe_fast_skips = 0
     original_update = engine.text.text.Text.update
     def capture(self, *args, **kwargs):
         if self.text and isinstance(self.text[0], str) and "TranslatedHelloToken" in self.text[0]:
@@ -65,14 +73,20 @@ init 1000 python hide:
             screen = engine.exports.get_screen("choice")
             if screen is not None:
                 items = screen.scope.get("items", [])
+                probe._probe_choices.append(tuple(i.caption for i in items))
                 action = next((i.action for i in items if i.action is not None), None)
                 if action is not None:
                     return action()
             return engine.store.Return()()
     def advance():
-        engine.ui.timer(0.12, action=AdvanceAction())
+        if engine.config.skipping != "fast":
+            engine.ui.timer(0.12, action=AdvanceAction())
+    def fast_skipped():
+        probe._probe_fast_skips += 1
     engine.config.overlay_functions.append(advance)
+    engine.config.fast_skipping_callbacks.append(fast_skipped)
     engine.game.preferences.text_cps = 60
+    engine.game.preferences.skip_unseen = True
 
 default probe_name = "SyntheticName"
 default probe_set = ["AlreadyToken"]
@@ -89,10 +103,11 @@ label start:
         prediction_label.block[0].predict()
     "GreetingsToken {b}[probe_name]{/b}{w=0.05} end"
     python:
-        assert "TranslatedHelloToken" in _last_say_what, _last_say_what
+        assert _last_say_what == "TranslatedHelloToken {b}[probe_name]{/b}{w=0.05} end", _last_say_what
         assert sys.modules["_rpykit_translation_runtime_v1"]._probe_seen, "translated Text not observed"
         assert any(row[3] for row in sys.modules["_rpykit_translation_runtime_v1"]._probe_seen), "slow dialogue was disabled"
         assert config.developer is True
+    $ renpy.pause(0.05, hard=True)
     menu:
         set probe_set
         "AlreadyToken":
@@ -105,6 +120,7 @@ label start:
             $ probe_selected = "second"
     python:
         assert probe_selected == "first", probe_selected
+        assert ("TranslatedFirstToken [probe_name]", "TranslatedSecondToken") in sys.modules["_rpykit_translation_runtime_v1"]._probe_choices
         assert "FirstToken [probe_name]" in probe_set, probe_set
         assert "TranslatedFirstToken [probe_name]" not in probe_set
         chosen_keys = list(persistent._chosen.keys())
@@ -124,12 +140,17 @@ label start:
         $ sys.modules["_rpykit_translation_runtime_v1"]._probe_rolled_back = True
         $ renpy.rollback(force=True, checkpoints=1, greedy=False)
     $ assert "TranslatedHelloToken" in _last_say_what
+    $ config.skipping = "fast"
+    "HelloToken fast-forward"
+    $ assert sys.modules["_rpykit_translation_runtime_v1"]._probe_fast_skips == 1
+    $ assert _last_say_what == "TranslatedHelloToken fast-forward", _last_say_what
+    $ config.skipping = None
     "StopToken"
     $ assert _last_say_what == "StopToken"
     "HelloToken after stop"
     python:
         assert _last_say_what == "HelloToken after stop", _last_say_what
-        renpy.log("RPYKIT_TRANSLATION_PROBE: dialogue/tag/interpolation/slow/menu/set/chosen/save/load/rollback/stop PASS")
+        renpy.log("RPYKIT_TRANSLATION_PROBE: synthetic scenario PASS")
         renpy.quit()
 '''
 
@@ -198,9 +219,6 @@ def _copy_runtime(source, destination):
 
 def verify(game, cli=None):
     source = Path(game).resolve()
-    survey = renpy_translation.survey(source)
-    if not survey["supported"]:
-        raise ValueError("Engine not reviewed: " + "; ".join(survey["reasons"]))
     requests = []
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -225,6 +243,10 @@ def verify(game, cli=None):
             game_dir.mkdir()
             (game_dir / "screens.rpy").write_text(SCREENS, encoding="utf-8")
             (game_dir / "script.rpy").write_text(NOHOST, encoding="utf-8")
+            survey = renpy_translation.survey(stage)
+            if not survey["supported"]:
+                raise ValueError("Engine not reviewed: " + "; ".join(survey["reasons"]))
+            assert survey["coverage"]["standard_adv_menu"], "Styled synthetic choice screen was not qualified"
             env = {k: v for k, v in os.environ.items() if not k.startswith(("RENPY_", "RPYKIT_TRANSLATION_"))}
             env.update(RENPY_PATH_TO_SAVES=str(stage / "isolated-saves"),
                        RENPY_MULTIPERSISTENT=str(stage / "isolated-multipersistent"),
@@ -249,7 +271,7 @@ def verify(game, cli=None):
                        RPYKIT_TRANSLATION_TOKEN="synthetic-probe-token", RPYKIT_TRANSLATION_SESSION="synthetic-session",
                        RPYKIT_TRANSLATION_GAME="synthetic-game", RPYKIT_TRANSLATION_WAIT_MS="2000")
             log = _run_probe(launcher, stage, env)
-            marker = "RPYKIT_TRANSLATION_PROBE: dialogue/tag/interpolation/slow/menu/set/chosen/save/load/rollback/stop PASS"
+            marker = "RPYKIT_TRANSLATION_PROBE: synthetic scenario PASS"
             assert marker in log, log[-2000:]
             assert not any("PredictOnlyToken" in text or "HiddenToken" in text or "AlreadyToken" in text
                            for request in requests for text in request["texts"]), requests
@@ -263,9 +285,9 @@ def verify(game, cli=None):
                 reverted = result.returncode == 0 and not (game_dir / renpy_translation.REL).exists()
                 assert reverted, "CLI connector revert failed"
             return {"engine": survey["engine_version"], "passed": True, "synthetic_only": True,
-                    "requests": len(requests), "menu_batch": True, "prediction_requests": 0,
+                    "requests": len(requests), "menu_batch": True, "styled_choice": True, "prediction_requests": 0,
                     "save_load": True, "rollback": True, "ordinary_launch": True,
-                    "stop_fallback": True, "reverted": reverted,
+                    "pause": True, "fast_forward": True, "stop_fallback": True, "reverted": reverted,
                     "packaged_cli_verified": bool(cli and Path(cli).suffix.lower() == ".exe"),
                     "source_cli_verified": bool(cli and Path(cli).suffix.lower() == ".py")}
     finally:

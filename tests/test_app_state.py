@@ -2,10 +2,13 @@
 
 import json
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
 import app_state
+import engine_adapters
+import game_launch
 
 
 def make_game(parent, name="Example"):
@@ -15,16 +18,42 @@ def make_game(parent, name="Example"):
     return root
 
 
-def test_add_game_requires_a_game_directory_and_never_scans_it(tmp_path):
-    game = make_game(tmp_path)
+def test_unknown_engine_can_be_bookmarked_and_launched_without_detection(tmp_path, monkeypatch):
+    game = tmp_path / "Example"
+    bin_dir = game / "bin"
+    bin_dir.mkdir(parents=True)
+    executable = bin_dir / "Play.exe"
+    executable.write_bytes(b"fixture, never executed")
+
+    def unexpected_scan(*args, **kwargs):
+        pytest.fail("Library persistence must not detect the game engine")
+
+    monkeypatch.setattr(engine_adapters, "detect", unexpected_scan)
     state = app_state.add_game(app_state.default_state(), game)
 
     assert state["games"] == [{"path": str(game.resolve()), "name": "Example",
                                "available": True}]
     assert state["active_game"] == str(game.resolve())
-    assert {child.name for child in game.iterdir()} == {"game", "renpy"}
-    with pytest.raises(ValueError, match="Ren.*Py"):
-        app_state.add_game(state, tmp_path)
+    state = app_state.rename_game(state, game, "Ordinary game")
+    state = app_state.set_launcher(state, game, executable)
+    filename = tmp_path / "library.json"
+    app_state.save_state(state, filename)
+    entry, = app_state.load_state(filename)["games"]
+    assert entry["name"] == "Ordinary game"
+    assert entry["available"] is True
+    assert entry["launcher_rel"] == "bin/Play.exe"
+
+    with mock.patch.object(game_launch.subprocess, "Popen") as popen:
+        game_launch.launch(entry["path"], entry["launcher_rel"])
+    assert popen.call_args.args == ([str(executable)],)
+    assert popen.call_args.kwargs["cwd"] == str(bin_dir)
+    with mock.patch.object(game_launch.os, "startfile", create=True) as open_folder:
+        game_launch.open_folder(entry["path"])
+    open_folder.assert_called_once_with(str(game.resolve()))
+
+    for invalid in (tmp_path / "missing", executable):
+        with pytest.raises(ValueError, match="游戏目录"):
+            app_state.add_game(state, invalid)
 
 
 def test_add_game_deduplicates_paths_and_allows_renaming(tmp_path):

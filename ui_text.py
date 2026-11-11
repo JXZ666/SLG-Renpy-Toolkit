@@ -119,6 +119,9 @@ def _match(reason):
         return ("rpg_gallery_unsupported",
                 "RPG Maker MV/MZ 暂不支持解锁画廊。")
 
+    if text.startswith("MV/MZ live translation is not implemented"):
+        return ("rpg_translation_unsupported", "RPG Maker MV/MZ 目前仅支持字体补丁。")
+
     if text.startswith("required engine hook missing:"):
         detail = text.split(":", 1)[1].strip()
         if detail:
@@ -301,6 +304,11 @@ def _match(reason):
     if text.startswith("Gallery inspection failed:"):
         return ("gallery_scan_failed", "画廊检查失败，详细原因已写入运行日志。")
 
+    if text.startswith("Ren'Py dialogue/menu interfaces are not a reviewed"):
+        return ("translation_engine_unreviewed", "此 Ren’Py 构建尚未审核，实时汉化保留原文。")
+    if text.startswith("Translation interface inspection failed"):
+        return ("translation_scan_failed", "无法完成汉化接口检查，请检查游戏文件后重试。")
+
     # --- Engine detection -------------------------------------------------
     if text.startswith("Unknown engine"):
         return ("engine_unknown", "未识别游戏引擎，无法确定支持范围。")
@@ -394,6 +402,13 @@ def support_copy(spec, feature_id=None):
         return (level, TYPE_LABELS[level], detail)
 
     if supported is True:
+        coverage = data.get("coverage")
+        if feature_id == "translation" and isinstance(coverage, dict) and coverage.get("dialogue") is True:
+            version = data.get("engine_version")
+            prefix = "已审核 Ren’Py %s 构建。" % version if isinstance(version, str) else ""
+            options = ("检测到常规选项源码，运行时核对后翻译。" if coverage.get("standard_adv_menu") is True
+                       else "选项保留原文。")
+            return ("supported", TYPE_LABELS["supported"], prefix + "支持标准对白。" + options)
         if experimental:
             level = "experimental"
             detail = ("实验性功能，尚未在真实引擎完整验证：" + joined

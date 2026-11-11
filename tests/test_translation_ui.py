@@ -1,10 +1,188 @@
 """Exercise desktop integration without starting a game or a network provider."""
 from unittest import mock
 
+import pytest
+
 import app_state
 import appgui
 import game_launch
-from test_stable_regressions import controller
+import translation_config
+from test_stable_regressions import Value, Widget, controller
+
+
+def _translation_survey(fontfix=True, translation=True):
+    return {"feature_support": {
+        "fontfix": {"supported": fontfix, "reasons": ["字体接口不可用"]},
+        "translation": {"supported": translation, "reasons": ["未验证的引擎构建"]},
+    }}
+
+
+@pytest.fixture
+def launch_controller():
+    app = controller()
+    app.game_dir = "fixture-game"
+    app._translation_id = app._translation_game = app._translation_host = None
+    app.close_after_work = False
+    app._library_launcher = mock.Mock(return_value="Play.exe")
+    app._read_translation_settings = mock.Mock(return_value=translation_config.default_settings())
+    app._new_translation_host = mock.Mock()
+    app.set_game_dir = mock.Mock()
+    app._refresh_state = mock.Mock()
+    app._destroy_root = mock.Mock()
+    return app
+
+
+@pytest.mark.parametrize("close_requested", [False, True])
+def test_install_system_exit_releases_translation_start(launch_controller, close_requested):
+    app = launch_controller
+
+    def fail_then_allow(_args):
+        if engine_run.call_count == 1:
+            app.close_after_work = close_requested
+            raise SystemExit("private fixture failure")
+        return 0
+
+    with mock.patch.object(appgui.engine_adapters, "survey", return_value=_translation_survey()), \
+            mock.patch("cmd_fontfix.installed_state", return_value={}), \
+            mock.patch("translation_ui.messagebox.askyesno", return_value=True), \
+            mock.patch("translation_ui.threading.Thread",
+                       side_effect=lambda target, **_options: mock.Mock(start=target)), \
+            mock.patch.object(appgui.engine_adapters, "run", side_effect=fail_then_allow) as engine_run, \
+            mock.patch.object(game_launch, "launch") as launch:
+        app.start_translation({"path": app.game_dir})
+        app._handle_event(app.queue.get_nowait())
+        assert not app.busy and not app._translation_preparing
+        assert app._translation_id is None
+        log = app._log.call_args.args[0]
+        assert "install_failed" in log and "private fixture failure" not in log
+        app._new_translation_host.assert_not_called()
+        launch.assert_not_called()
+        if close_requested:
+            app._destroy_root.assert_called_once()
+        else:
+            app.start_translation({"path": app.game_dir})
+            app._handle_event(app.queue.get_nowait())
+            assert not app.busy and not app._translation_preparing
+            assert app.var_global_status.get() == "等待游戏文本"
+            launch.assert_called_once()
+            app._destroy_root.assert_not_called()
+
+
+def test_game_launch_failure_stops_owned_host_and_releases_gui(launch_controller):
+    app = launch_controller
+    with mock.patch.object(appgui.engine_adapters, "survey", return_value=_translation_survey()), \
+            mock.patch("cmd_fontfix.installed_state",
+                       return_value={"translation_current": True, "ours": True, "current": True}), \
+            mock.patch("translation_ui.threading.Thread",
+                       side_effect=lambda target, **_options: mock.Mock(start=target)), \
+            mock.patch.object(game_launch, "launch", side_effect=OSError("private launcher detail")):
+        app.start_translation({"path": app.game_dir})
+    app._handle_event(app.queue.get_nowait())
+    app._new_translation_host.return_value.stop.assert_called_once()
+    assert not app.busy and not app._translation_preparing
+    log = app._log.call_args.args[0]
+    assert "launch_failed" in log and "private launcher detail" not in log
+
+
+def test_close_while_starting_host_stops_it_without_launching_game(launch_controller):
+    app = launch_controller
+    host = mock.Mock()
+
+    def start_and_close(*_args):
+        app.close_after_work = True
+        return host
+
+    app._new_translation_host.side_effect = start_and_close
+    with mock.patch.object(appgui.engine_adapters, "survey", return_value=_translation_survey()), \
+            mock.patch("cmd_fontfix.installed_state",
+                       return_value={"translation_current": True, "ours": True, "current": True}), \
+            mock.patch("translation_ui.threading.Thread",
+                       side_effect=lambda target, **_options: mock.Mock(start=target)), \
+            mock.patch.object(game_launch, "launch") as launch:
+        app.start_translation({"path": app.game_dir})
+    app._handle_event(app.queue.get_nowait())
+    host.stop.assert_called_once()
+    launch.assert_not_called()
+    app._destroy_root.assert_called_once()
+
+
+@pytest.mark.parametrize("fontfix,translation,reason", [
+    (False, True, "字体接口不可用"),
+    (True, False, "未验证的引擎构建"),
+])
+def test_both_translation_entries_require_the_two_features(launch_controller, fontfix, translation, reason):
+    app = launch_controller
+    app.simulate_run = mock.Mock()
+    with mock.patch.object(appgui.engine_adapters, "survey",
+                           return_value=_translation_survey(fontfix, translation)), \
+            mock.patch("translation_ui.messagebox.showinfo"):
+        app.start_translation_copy()
+        app.start_translation({"path": app.game_dir})
+    app.simulate_run.assert_not_called()
+    app._library_launcher.assert_not_called()
+    assert reason in app._log.call_args.args[0]
+
+
+def test_supported_translation_copy_requests_exact_features_without_toggling(launch_controller):
+    app = launch_controller
+    app.simulate_run = mock.Mock()
+    app.var_on = {"fontfix": Value(False), "translation": Value(False), "gallery": Value(True)}
+    with mock.patch.object(appgui.engine_adapters, "survey", return_value=_translation_survey()):
+        app.start_translation_copy()
+    app.simulate_run.assert_called_once_with(feature_ids=("fontfix", "translation"))
+    assert [var.get() for var in app.var_on.values()] == [False, False, True]
+
+
+def test_connection_probe_returns_immediately_and_does_not_change_live_session(launch_controller):
+    app = launch_controller
+    app._translation_probe_pending = None
+    app._translation_id = "live-session"
+    app.btn_translation_probe = Widget()
+    app.var_translation_probe_status = Value()
+    app.var_global_status.set("等待游戏文本")
+    result = {"status": "auth_error", "elapsed_ms": 5, "detail": "private fixture key"}
+    with mock.patch("translation_ui.threading.Thread") as thread, \
+            mock.patch("translation_service.probe_provider", return_value=result) as provider:
+        app._test_translation_connection()
+        provider.assert_not_called()
+        assert app.btn_translation_probe.options["state"] == "disabled"
+        thread.call_args.kwargs["target"]()
+    app._handle_event(app.queue.get_nowait())
+    assert app._translation_id == "live-session"
+    assert app.var_global_status.get() == "等待游戏文本"
+    assert app.btn_translation_probe.options["state"] == "normal"
+    message = app.var_translation_probe_status.get()
+    assert "鉴权失败" in message and "5 毫秒" in message
+    assert "private fixture key" not in message
+
+
+@pytest.mark.parametrize("closing", [False, True])
+def test_connection_probe_ignores_result_after_switch_or_close(launch_controller, closing):
+    app = launch_controller
+    app._translation_probe_pending = ("test-operation", app.game_dir)
+    app._translation_probe_valid = True
+    app.btn_translation_probe = Widget()
+    app.var_translation_probe_status = Value("正在测试连接…")
+    app._invalidate_translation_probe(closing=closing)
+    before = app.var_translation_probe_status.get()
+    # Returning to the same path after a selection change still leaves this test stale.
+    app._handle_event(("__translation_probe__", "test-operation", app.game_dir,
+                       {"status": "success", "elapsed_ms": 5}))
+    assert app.var_translation_probe_status.get() == before
+    assert app._translation_probe_pending is None
+
+
+def test_first_game_text_updates_waiting_status_only_for_current_session(launch_controller):
+    app = launch_controller
+    app._translation_id, app._translation_game = "active", app.game_dir
+    app._translation_host = mock.Mock()
+    app._translation_status = "等待游戏文本"
+    app.var_global_status.set(app._translation_status)
+    event = {"status": "received_text"}
+    app._handle_event(("__translation_log__", "older", app.game_dir, event))
+    assert app.var_global_status.get() == "等待游戏文本"
+    app._handle_event(("__translation_log__", "active", app.game_dir, event))
+    assert app.var_global_status.get() == "实时汉化运行中"
 
 
 def test_first_library_start_always_asks_and_cancel_does_not_launch(tmp_path):
@@ -144,12 +322,14 @@ def test_translation_install_refreshes_current_game_after_start_or_failure():
         app._refresh_state.assert_called_once()
 
 
-def test_scan_completion_keeps_active_translation_status():
+@pytest.mark.parametrize("status", ["等待游戏文本", "实时汉化已暂停", "实时汉化运行中"])
+def test_scan_completion_keeps_active_translation_status(status):
     app = controller()
     app.game_dir = "game"
     app._translation_host = mock.Mock()
+    app._translation_status = status
     app._scan_finished(0, "game", {}, {}, None)
-    assert app.var_global_status.get() == "实时汉化运行中"
+    assert app.var_global_status.get() == status
 
 
 def test_translation_copy_uses_session_environment_and_cleanup_stops_host():

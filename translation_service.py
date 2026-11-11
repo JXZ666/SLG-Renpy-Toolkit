@@ -30,6 +30,7 @@ MAX_BODY = 65536
 MAX_TEXTS = 64
 MAX_RESPONSE = 262144
 NETWORK_TIMEOUT = 10.0
+PROBE_TEXT = "Hello, world."
 WORKERS = 4
 QUEUE_SIZE = 64
 
@@ -54,8 +55,14 @@ def _json_request(req, timeout):
             raise TranslationError("invalid_response")
         return json.loads(raw.decode("utf-8"))
     except error.HTTPError as exc:
-        raise TranslationError("rate_limited" if exc.code == 429 else "http_error") from None
-    except (error.URLError, TimeoutError, OSError):
+        status = {401: "auth_error", 403: "auth_error", 429: "rate_limited"}.get(exc.code, "http_error")
+        raise TranslationError(status) from None
+    except error.URLError as exc:
+        status = "timeout" if isinstance(exc.reason, TimeoutError) else "network_error"
+        raise TranslationError(status) from None
+    except TimeoutError:
+        raise TranslationError("timeout") from None
+    except OSError:
         raise TranslationError("network_error") from None
     except (ValueError, UnicodeError):
         raise TranslationError("invalid_response") from None
@@ -137,6 +144,37 @@ class AIProvider:
             raise TranslationError("invalid_response") from None
 
 
+def _provider_for(settings):
+    return AIProvider(settings) if settings["provider"] == "ai" else GoogleProvider(settings)
+
+
+def _translate_checked(provider, text, timeout):
+    from translation_text import protect, restore, is_safe_translation
+
+    masked, tokens = protect(text)
+    candidate = provider.translate(masked, timeout=timeout)
+    if not isinstance(candidate, str) or len(candidate) > 65536 or not candidate.strip():
+        raise TranslationError("invalid_response")
+    result = restore(candidate, tokens)
+    if result is None or not is_safe_translation(text, result):
+        raise TranslationError("unsafe")
+    return result
+
+
+def probe_provider(settings, timeout=NETWORK_TIMEOUT):
+    """Send one fixed sample through the selected provider and return status only."""
+    started = time.monotonic()
+    try:
+        provider = _provider_for(normalize_settings(settings))
+        _translate_checked(provider, PROBE_TEXT, timeout)
+        status = "success"
+    except TranslationError as exc:
+        status = exc.status
+    except Exception:
+        status = "provider_error"
+    return {"status": status, "elapsed_ms": round((time.monotonic() - started) * 1000)}
+
+
 class _Pending:
     def __init__(self, text):
         self.text = text
@@ -195,11 +233,11 @@ class TranslationHost:
         self._cache_lock = threading.Lock()
         self._active = False
         self._stopped = False
+        self._received_text = False
         self._server = None
         self._queue = queue.Queue(QUEUE_SIZE)
         self._inflight = {}
-        self._provider = (AIProvider(self.settings) if self.settings["provider"] == "ai"
-                          else GoogleProvider(self.settings))
+        self._provider = _provider_for(self.settings)
         self._endpoint = (self._provider.url if self.settings["provider"] == "ai"
                           else GOOGLE_URL)
 
@@ -214,6 +252,13 @@ class TranslationHost:
             self.event_callback(event)
         except Exception:
             pass
+
+    def _notify_first_text(self):
+        with self._lock:
+            if not self._active or self._received_text:
+                return
+            self._received_text = True
+        self._notify("received_text", 0)
 
     @contextmanager
     def _database(self):
@@ -293,17 +338,25 @@ class TranslationHost:
                         host._notify("luna_conflict", 0)
                         self._reply(200, {"ok": True})
                         return
+                    host._notify_first_text()
                     results = host.translate_batch(data["texts"], data["budget_ms"], data["kind"])
                     self._reply(200, results)
 
             self._server = _Server(("127.0.0.1", 0), Handler)
             self._active = True
-            for index in range(WORKERS):
-                threading.Thread(target=self._worker, name="translation-worker-%d" % index,
+            try:
+                for index in range(WORKERS):
+                    threading.Thread(target=self._worker, name="translation-worker-%d" % index,
+                                     daemon=True).start()
+                threading.Thread(target=self._server.serve_forever,
+                                 kwargs={"poll_interval": 0.05}, name="translation-loopback",
                                  daemon=True).start()
-            threading.Thread(target=self._server.serve_forever,
-                             kwargs={"poll_interval": 0.05}, name="translation-loopback",
-                             daemon=True).start()
+            except Exception:
+                # The server thread did not start, so shutdown() would block.
+                self._active = False
+                server, self._server = self._server, None
+                server.server_close()
+                raise
         self._notify("started", 0)
         return self
 
@@ -416,7 +469,6 @@ class TranslationHost:
         return {"results": results, "statuses": statuses}
 
     def _worker(self):
-        from translation_text import protect, restore, is_safe_translation
         while True:
             try:
                 key, job = self._queue.get(timeout=0.1)
@@ -431,15 +483,8 @@ class TranslationHost:
                     return
             result, status = None, "invalid_response"
             try:
-                masked, tokens = protect(job.text)
-                candidate = self._provider.translate(masked, timeout=NETWORK_TIMEOUT)
-                if not isinstance(candidate, str) or len(candidate) > 65536 or not candidate.strip():
-                    raise TranslationError("invalid_response")
-                result = restore(candidate, tokens)
-                if result is None or not is_safe_translation(job.text, result):
-                    result, status = None, "unsafe"
-                else:
-                    status = "success"
+                result = _translate_checked(self._provider, job.text, NETWORK_TIMEOUT)
+                status = "success"
             except TranslationError as exc:
                 status = exc.status
             except Exception:

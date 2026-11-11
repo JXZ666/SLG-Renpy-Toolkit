@@ -54,6 +54,45 @@ def test_custom_choice_screen_excluded(tmp_path, monkeypatch):
     assert not connector.survey(tmp_path)["coverage"]["standard_adv_menu"]
 
 
+STYLED_SCREEN = '''screen choice(items):
+    style_prefix "choice"  # The existing style family.
+    frame xalign 0.5:
+        yalign 0.5
+        padding (10, 6)
+        hbox:
+            spacing 10
+            for i in items:
+                textbutton i.caption action i.action text_size 24:
+                    text_font "fonts/a#b.ttf"
+                    xsize 240
+'''
+
+
+def test_source_visible_static_appearance_qualifies(tmp_path, monkeypatch):
+    engine_files(tmp_path, monkeypatch)
+    (tmp_path / "game/screens.rpy").write_text(STYLED_SCREEN, encoding="utf-8")
+    assert connector.survey(tmp_path)["coverage"]["standard_adv_menu"]
+
+
+@pytest.mark.parametrize(("before", "after"), [
+    ("for i in items:", "for i in sorted(items):"),
+    ("for i in items:", "for i index i.caption in items:"),
+    ("spacing 10", "spacing gui.choice_spacing"),
+    ("spacing 10", "use another_screen"),
+    ("spacing 10", "$ items.reverse()"),
+    ("        hbox:", "          hbox:"),
+    ("choice(items)", "choice(items, extra=None)"),
+    ("action i.action", "action [i.action]"),
+    ("action i.action", "action i.action alternate Return()"),
+])
+def test_styled_menu_with_nonappearance_changes_does_not_qualify(tmp_path, monkeypatch, before, after):
+    engine_files(tmp_path, monkeypatch)
+    (tmp_path / "game/screens.rpy").write_text(STYLED_SCREEN.replace(before, after), encoding="utf-8")
+    coverage = connector.survey(tmp_path)["coverage"]
+    assert coverage["dialogue"]
+    assert not coverage["standard_adv_menu"]
+
+
 @pytest.fixture
 def host():
     state = {"calls": [], "statuses": [], "mode": "good"}
@@ -124,6 +163,31 @@ def runtime(tmp_path, monkeypatch, host=None, install_env=True):
         return items[0][1].value
     def menu(items):
         return engine.store.menu(items)
+
+    class SLScreen(types.SimpleNamespace):
+        pass
+
+    class SLFor(types.SimpleNamespace):
+        pass
+
+    class SLDisplayable(types.SimpleNamespace):
+        pass
+
+    textbutton = object()
+    multi_box = object()
+    button = SLDisplayable(name="textbutton", displayable=textbutton, variable=None,
+                           positional=["i.caption"], keyword=[("action", "i.action")],
+                           default_keywords={}, atl_transform=None, children=[])
+    loop = SLFor(variable="i", expression="items", index_expression=None,
+                 keyword=[], atl_transform=None, children=[button])
+    layout = SLDisplayable(name="vbox", displayable=multi_box, variable=None,
+                           positional=[], keyword=[], default_keywords={"layout": "vertical"},
+                           atl_transform=None, children=[loop])
+    empty = object()
+    parameter = types.SimpleNamespace(kind=1, POSITIONAL_OR_KEYWORD=1, default=empty, empty=empty)
+    screen_ast = SLScreen(name="choice", parameters=types.SimpleNamespace(parameters={"items": parameter}),
+                          keyword=[("style_prefix", '"choice"')], atl_transform=None, children=[layout])
+    choice_screen = types.SimpleNamespace(ast=screen_ast, function=screen_ast, location=("game/screens.rpy", 1))
     engine = types.SimpleNamespace(
         config=types.SimpleNamespace(basedir=str(tmp_path), gamedir=str(tmp_path / "game"),
                                     say_menu_text_filter=lambda s: s.replace("Greetings", "Hello"),
@@ -133,10 +197,12 @@ def runtime(tmp_path, monkeypatch, host=None, install_env=True):
                                       get_menu_args=lambda: ((), {}), log=lambda message: None),
         character=types.SimpleNamespace(ADVCharacter=ADV, display_say=lambda: None),
         ast=types.SimpleNamespace(Say=Say),
-        ui=types.SimpleNamespace(ChoiceReturn=ChoiceReturn),
+        ui=types.SimpleNamespace(ChoiceReturn=ChoiceReturn, _textbutton=textbutton),
         game=types.SimpleNamespace(context=lambda: types.SimpleNamespace(init_phase=False)),
-        display=types.SimpleNamespace(screen=types.SimpleNamespace(get_screen_variant=lambda name:
-            types.SimpleNamespace(ast=object(), location=("game/screens.rpy", 1)))),
+        sl2=types.SimpleNamespace(slast=types.SimpleNamespace(SLScreen=SLScreen, SLFor=SLFor,
+                                                             SLDisplayable=SLDisplayable)),
+        display=types.SimpleNamespace(screen=types.SimpleNamespace(get_screen_variant=lambda name: choice_screen),
+                                      layout=types.SimpleNamespace(MultiBox=multi_box)),
         text=types.SimpleNamespace(text=types.SimpleNamespace(Text=type("Text", (), {"render": lambda self: None}))),
     )
     for key in ("URL", "TOKEN", "SESSION", "GAME", "WAIT_MS"):
@@ -198,6 +264,26 @@ def test_custom_menu_arguments_and_screen_remain_original(tmp_path, monkeypatch,
     items = [("First", Action("First", 42))]
     engine.exports.get_menu_args = lambda: ((), {"screen": "custom_choice"})
     engine.exports.menu(items)
+    assert state["menu_items"] == items
+    assert not host[1]["calls"]
+
+
+@pytest.mark.parametrize("change", ["source", "site", "cached_action", "compiled_only"])
+def test_menu_requires_visible_source_and_matching_loaded_shape(tmp_path, monkeypatch, host, change):
+    module, engine, state, Say, ADV, NVL, Action = runtime(tmp_path, monkeypatch, host)
+    screen = engine.display.screen.get_screen_variant("choice")
+    source = tmp_path / "game/screens.rpy"
+    if change == "source":
+        source.write_bytes(source.read_bytes() + b"\n# Edited after inspection.")
+    elif change == "site":
+        screen.location = ("game/screens.rpy", 2)
+    elif change == "cached_action":
+        button = screen.ast.children[0].children[0].children[0]
+        button.keyword = [("action", "[i.action]")]
+    else:
+        source.unlink()
+    items = [("First", Action("First", 42))]
+    assert engine.exports.menu(items) == 42
     assert state["menu_items"] == items
     assert not host[1]["calls"]
 

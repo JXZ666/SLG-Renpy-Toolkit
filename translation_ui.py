@@ -7,7 +7,28 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 import branding
+import ui_text
 import ui_tokens
+
+
+_TRANSLATION_FEATURES = ("fontfix", "translation")
+_PROBE_IDLE = "使用当前设置发送一条示例文字。"
+_PROVIDER_MESSAGES = {
+    "auth_error": "翻译接口鉴权失败。自填 AI 请检查 Key 和账号权限，免费机翻可稍后重试。",
+    "network_error": "无法连接翻译服务，请检查网络或接口地址。",
+    "rate_limited": "翻译服务请求过多，请稍后重试。",
+    "timeout": "等待翻译服务超时，请检查网络后重试。",
+    "http_error": "翻译接口返回错误，请检查接口地址和服务状态。",
+    "unsafe": "译文格式校验未通过，请重试或更换翻译来源。",
+    "invalid_response": "翻译服务返回了无效结果，请检查模型或翻译来源。",
+    "provider_error": "翻译服务不可用，请检查翻译设置后重试。",
+}
+_START_FAILURES = {
+    "install_failed": "连接补丁安装失败。请在处理页检查目录和补丁冲突。",
+    "host_failed": "本机翻译服务未能启动。请检查翻译设置和本地存储权限。",
+    "launch_failed": "游戏启动失败。请在游戏库重新选择启动程序后重试。",
+    "cancelled": "已取消汉化启动。",
+}
 
 
 class TranslationUIMixin:
@@ -21,12 +42,15 @@ class TranslationUIMixin:
         self._translation_game = None
         self._translation_preparing = False
         self._translation_conflict = False
+        self._translation_status = None
+        self._translation_probe_pending = None
+        self._translation_probe_valid = False
         self._sim_translation_settings = None
         self._sim_translation_requested = False
 
     def _build_translation_settings(self, parent, palette):
         _, body = self._card(parent, padding=ui_tokens.SPACING[4])
-        ctk.CTkLabel(body, text="实时汉化（试验）", anchor="w", text_color=palette["fg"],
+        ctk.CTkLabel(body, text="实时汉化", anchor="w", text_color=palette["fg"],
                      font=self._font(ui_tokens.FONT_ROLES["section"], "bold")).pack(anchor="w")
         ctk.CTkLabel(body, text="默认免费机翻；只翻译当前对白与支持的剧情选项。免费服务失败会保留原文，不会自动调用 AI。",
                      wraplength=1, justify="left", text_color=palette["dim"],
@@ -65,9 +89,22 @@ class TranslationUIMixin:
                         text_color=palette["fg"], font=self._font()).pack(anchor="w", pady=12)
         ctk.CTkLabel(body, text="当前文本会发送给所选服务。超时保留原文，迟到译文供下次使用；不会预先翻译整部游戏。",
                      wraplength=1, justify="left", text_color=palette["dim"], font=self._font()).pack(anchor="w")
-        ctk.CTkButton(body, text="保存翻译设置", height=36,
+        actions = ctk.CTkFrame(body, fg_color="transparent")
+        actions.pack(fill="x", pady=(12, 0))
+        ctk.CTkButton(actions, text="保存翻译设置", height=36,
                       fg_color=palette["accent_fill"], text_color=palette["on_accent"],
-                      command=self.save_translation_settings).pack(anchor="w", pady=(12, 0))
+                      command=self.save_translation_settings).pack(side="left")
+        self.btn_translation_probe = ctk.CTkButton(
+            actions, text="测试连接", height=36, width=92,
+            fg_color=palette["panel_alt"], hover_color=palette["accent_soft"],
+            text_color=palette["fg"], command=self._test_translation_connection)
+        self.btn_translation_probe.pack(side="left", padx=(8, 0))
+        self.var_translation_probe_status = tk.StringVar(value=_PROBE_IDLE)
+        ctk.CTkLabel(body, textvariable=self.var_translation_probe_status, anchor="w",
+                     wraplength=1, justify="left", text_color=palette["dim"],
+                     font=self._font()).pack(fill="x", pady=(6, 0))
+        for var in self.translation_vars.values():
+            var.trace_add("write", lambda *_args: self._invalidate_translation_probe())
 
     def _read_translation_settings(self):
         from translation_config import default_settings
@@ -97,6 +134,56 @@ class TranslationUIMixin:
             messagebox.showerror(branding.APP_NAME, "翻译设置未保存。请检查语言、接口、模型及等待时间；密钥不会写入日志。")
             return
         self.var_global_status.set("翻译设置已保存，下次会话生效")
+
+    def _invalidate_translation_probe(self, closing=False):
+        self._translation_probe_valid = False
+        if closing:
+            self._translation_probe_pending = None
+        elif hasattr(self, "var_translation_probe_status"):
+            self.var_translation_probe_status.set(_PROBE_IDLE)
+
+    def _test_translation_connection(self):
+        from translation_service import probe_provider
+
+        if self._translation_probe_pending is not None:
+            return
+        try:
+            settings = self._read_translation_settings()
+        except (ValueError, TypeError):
+            self.var_translation_probe_status.set("翻译设置无效，请检查接口、模型及等待时间。")
+            return
+        operation_id, game = uuid.uuid4().hex, self.game_dir
+        self._translation_probe_pending = (operation_id, game)
+        self._translation_probe_valid = True
+        self.btn_translation_probe.configure(state="disabled")
+        self.var_translation_probe_status.set("正在测试连接…")
+
+        def worker():
+            result = probe_provider(settings)
+            self.queue.put(("__translation_probe__", operation_id, game, result))
+
+        try:
+            threading.Thread(target=worker, daemon=True).start()
+        except RuntimeError:
+            self._handle_translation_event(("__translation_probe__", operation_id, game,
+                                            {"status": "provider_error", "elapsed_ms": 0}))
+
+    def _finish_translation_probe(self, operation_id, game, result):
+        if getattr(self, "_translation_probe_pending", None) != (operation_id, game):
+            return
+        self._translation_probe_pending = None
+        self.btn_translation_probe.configure(state="normal")
+        if not self._translation_probe_valid or game != self.game_dir:
+            self.var_translation_probe_status.set(_PROBE_IDLE)
+            return
+        status = result["status"]
+        elapsed_ms = result["elapsed_ms"]
+        if status == "success":
+            message = "连接成功，耗时 %d 毫秒。" % elapsed_ms
+        else:
+            message = "测试失败，耗时 %d 毫秒。%s" % (
+                elapsed_ms, _PROVIDER_MESSAGES.get(status, _PROVIDER_MESSAGES["provider_error"]))
+        self.var_translation_probe_status.set(message)
 
     def _library_launcher(self, entry, replace=False):
         import app_state
@@ -149,26 +236,64 @@ class TranslationUIMixin:
         from translation_service import TranslationHost
         import proj
         cache = os.path.join(os.path.dirname(self._translation_config_path), "cache.sqlite3")
-        return TranslationHost(settings, proj.game_identity(game), cache_path=cache,
+        host = TranslationHost(settings, proj.game_identity(game), cache_path=cache,
                                event_callback=lambda event: self.queue.put(
-                                   ("__translation_log__", operation_id, game, event))).start()
+                                   ("__translation_log__", operation_id, game, event)))
+        try:
+            return host.start()
+        except (Exception, SystemExit):
+            host.stop()
+            raise
+
+    @staticmethod
+    def _translation_wait_status(settings):
+        if settings.get("wait_seconds") == 0:
+            return "实时汉化已暂停"
+        return "等待游戏文本"
+
+    def _check_translation_support(self, game):
+        import engine_adapters
+
+        problems, details = [], []
+        try:
+            survey = engine_adapters.survey(game, quick=True)
+        except (Exception, SystemExit):
+            problems.append("无法检查当前游戏。请确认目录可访问后重试。")
+        else:
+            support = survey.get("feature_support") if isinstance(survey, dict) else None
+            support = support if isinstance(support, dict) else {}
+            for fid, title in (("fontfix", "字体补丁"), ("translation", "实时汉化")):
+                spec = support.get(fid)
+                spec = spec if isinstance(spec, dict) else {}
+                if spec.get("supported") is True:
+                    continue
+                reasons = spec.get("reasons")
+                localized = " ".join(ui_text.localize_reasons(reasons, fid))
+                problems.append(title + "未通过兼容预检。" + localized)
+                if isinstance(reasons, str):
+                    reasons = [reasons]
+                if isinstance(reasons, (list, tuple)):
+                    details.extend(reason for reason in reasons if isinstance(reason, str))
+        if not problems:
+            return True
+        self._show_log()
+        self._log("[汉化预检] " + "\n".join(problems + details) + "\n")
+        messagebox.showinfo(branding.APP_NAME, "\n".join(problems))
+        return False
 
     def start_translation(self, entry):
         import cmd_fontfix
-        import renpy_translation
         if self.busy or self.sim_session is not None or self._translation_host is not None:
             return
         game = entry["path"]
+        if not self._check_translation_support(game):
+            return
         try:
-            support = renpy_translation.survey(game)
-            if not support.get("supported"):
-                self._log("实时汉化预检：" + "; ".join(support.get("reasons", [])) + "\n")
-                self._show_log()
-                messagebox.showinfo(branding.APP_NAME, "此游戏尚未通过内置汉化预检，详细范围见运行日志。")
-                return
             settings = self._read_translation_settings()
-            if settings["provider"] == "ai" and not all(settings.get(k) for k in ("ai_endpoint", "ai_model")):
-                raise ValueError("请先填写 AI 接口地址和模型。")
+        except (ValueError, TypeError):
+            messagebox.showerror(branding.APP_NAME, "翻译设置无效，请检查接口、模型及等待时间。")
+            return
+        try:
             rel = self._library_launcher(entry)
             if not rel:
                 return
@@ -177,27 +302,30 @@ class TranslationUIMixin:
             if needs_install and not messagebox.askyesno(
                     branding.APP_NAME, "实时汉化需要安装可撤销的字体与连接补丁。\n\n建议先在副本试用。现在安装到这个游戏并启动汉化？"):
                 return
-        except Exception as exc:
-            messagebox.showerror(branding.APP_NAME, "无法准备汉化：%s" % exc)
+        except (Exception, SystemExit):
+            messagebox.showerror(branding.APP_NAME, "无法准备汉化。请重新检查游戏目录和启动程序。")
             return
         self.set_game_dir(game, remember=False)
         self._translation_id = uuid.uuid4().hex
         self._translation_game = game
         self._translation_preparing = True
         self._translation_conflict = False
+        self._translation_status = self._translation_wait_status(settings)
         self.busy = True
         self._show_log()
         self._log("\n===== 实时汉化：准备连接 =====\n")
         self._set_buttons()
         operation_id = self._translation_id
+
         def worker():
             host = None
+            failure = "install_failed"
             try:
                 import engine_adapters
                 import game_launch
                 from appgui import _namespace
                 if needs_install:
-                    args = _namespace(game, feature_ids=["fontfix", "translation"])
+                    args = _namespace(game, feature_ids=_TRANSLATION_FEATURES)
                     import contextlib
                     from appgui import _Sink
                     sink = _Sink(self.queue)
@@ -206,26 +334,43 @@ class TranslationUIMixin:
                     if code:
                         raise RuntimeError("连接补丁安装失败，请在处理页检查冲突。")
                 if self.close_after_work:
-                    raise RuntimeError("已取消汉化启动。")
+                    self.queue.put(("__translation_failed__", operation_id, game, "cancelled"))
+                    return
+                failure = "host_failed"
                 host = self._new_translation_host(settings, game, operation_id)
+                if self.close_after_work:
+                    failure = "cancelled"
+                    host.stop()
+                    self.queue.put(("__translation_failed__", operation_id, game, failure))
+                    return
+                failure = "launch_failed"
                 process = game_launch.launch(game, rel, env=host.environment())
                 self.queue.put(("__translation_started__", operation_id, game, host, process))
-            except Exception:
-                if host:
-                    host.stop()
-                self.queue.put(("__translation_failed__", operation_id, game))
-        threading.Thread(target=worker, daemon=True).start()
+            except (Exception, SystemExit):
+                try:
+                    if host is not None:
+                        host.stop()
+                except Exception:
+                    pass
+                self.queue.put(("__translation_failed__", operation_id, game, failure))
+
+        try:
+            threading.Thread(target=worker, daemon=True).start()
+        except RuntimeError:
+            self._handle_translation_event(("__translation_failed__", operation_id, game, "host_failed"))
 
     def start_translation_copy(self):
-        if self._translation_host is not None:
+        if (not self.game_dir or self.busy or self.sim_session is not None
+                or self._translation_host is not None):
             return
-        for fid in ("fontfix", "translation"):
-            if fid in self.var_on:
-                self.var_on[fid].set(True)
-        self.simulate_run()
+        if self._check_translation_support(self.game_dir):
+            self.simulate_run(feature_ids=_TRANSLATION_FEATURES)
 
     def _handle_translation_event(self, item):
         event, operation_id, game = item[:3]
+        if event == "__translation_probe__":
+            self._finish_translation_probe(operation_id, game, item[3])
+            return
         if operation_id != self._translation_id or game != self._translation_game:
             if event == "__translation_started__":
                 item[3].stop()
@@ -233,7 +378,7 @@ class TranslationUIMixin:
         if event == "__translation_started__":
             self.busy = self._translation_preparing = False
             self._translation_host, self._translation_process = item[3:5]
-            if self.game_dir == game:
+            if self.game_dir == game and not self.close_after_work:
                 self._refresh_state()
             if self._translation_conflict:
                 self.stop_translation()
@@ -241,20 +386,23 @@ class TranslationUIMixin:
                 if self.close_after_work:
                     self._destroy_root()
                 return
-            self.var_global_status.set("实时汉化运行中")
-            self._log("汉化会话已启动；超时会显示原文，停止后游戏可继续运行。\n")
+            status = getattr(self, "_translation_status", None) or "等待游戏文本"
+            self.var_global_status.set(status)
+            self._log("汉化会话已启动。%s。\n" % status)
             self._set_buttons()
             if self.close_after_work:
                 self._destroy_root()
             else:
-                self.root.after(500, self._poll_translation)
+                self.root.after(500, self._poll_translation, operation_id, game)
         elif event == "__translation_failed__":
             self.busy = self._translation_preparing = False
             self._translation_id = None
-            if self.game_dir == game:
+            self._translation_status = None
+            if self.game_dir == game and not self.close_after_work:
                 self._refresh_state()
-            self._log("汉化启动失败：请检查连接补丁、启动程序或翻译设置。密钥不会写入日志。\n")
-            self.var_global_status.set("汉化启动失败，详见日志")
+            code = item[3] if len(item) > 3 and item[3] in _START_FAILURES else "install_failed"
+            self._log("[汉化启动 / %s] %s\n" % (code, _START_FAILURES[code]))
+            self.var_global_status.set("已取消汉化启动" if code == "cancelled" else "汉化启动失败，详见日志")
             self._set_buttons()
             if self.close_after_work:
                 self._destroy_root()
@@ -274,18 +422,26 @@ class TranslationUIMixin:
                 self.stop_translation()
                 self.var_global_status.set("外部 Luna 冲突，内置汉化已停止")
                 return
-            words = {"ok": "译文就绪", "translated": "译文就绪", "success": "译文就绪",
-                     "cache": "使用缓存", "cached": "使用缓存",
-                     "timeout": "等待超时，保留原文", "error": "服务失败，保留原文",
-                     "provider_error": "翻译服务不可用，保留原文", "network_error": "连接失败，保留原文",
-                     "rate_limited": "翻译服务请求限流，保留原文",
-                     "http_error": "翻译接口返回错误，请检查地址或授权；保留原文",
-                     "unsafe": "译文格式校验未通过，保留原文", "busy": "翻译队列繁忙，保留原文",
-                     "invalid_response": "翻译结果无效，保留原文",
-                     "stopped": "会话已停止", "started": "本机连接已就绪"}
-            self._log("[实时汉化] " + words.get(status, "未取得有效译文，保留原文") + "\n")
+            if status == "received_text":
+                self._translation_status = "实时汉化运行中"
+                if not self.busy and getattr(self, "_translation_host", None) is not None:
+                    self.var_global_status.set(self._translation_status)
+                self._log("[实时汉化] 已收到游戏文本。\n")
+                return
+            if not isinstance(status, str):
+                status = "provider_error"
+            words = {"success": "译文就绪", "cached": "使用缓存",
+                     "busy": "翻译队列繁忙，本次保留原文。",
+                     "cache_unavailable": "译文缓存暂不可用，请检查本地存储权限。",
+                     "stopped": "会话已停止", "started": "本机翻译服务已就绪"}
+            message = words.get(status)
+            if message is None:
+                message = _PROVIDER_MESSAGES.get(status, _PROVIDER_MESSAGES["provider_error"]) + "本次保留原文。"
+            self._log("[实时汉化] " + message + "\n")
 
-    def _poll_translation(self):
+    def _poll_translation(self, operation_id, game):
+        if operation_id != self._translation_id or game != self._translation_game:
+            return
         process = self._translation_process
         if self._translation_host is None or process is None:
             return
@@ -293,12 +449,13 @@ class TranslationUIMixin:
             self.stop_translation()
             self._log("游戏启动进程已退出，汉化连接已关闭。\n")
         else:
-            self.root.after(500, self._poll_translation)
+            self.root.after(500, self._poll_translation, operation_id, game)
 
     def stop_translation(self):
         host = getattr(self, "_translation_host", None)
         self._translation_host = self._translation_process = None
         self._translation_id = None
+        self._translation_status = None
         if host is not None:
             host.stop()
             self._log("实时汉化已停止；正在运行的游戏保留并回退原文。\n")

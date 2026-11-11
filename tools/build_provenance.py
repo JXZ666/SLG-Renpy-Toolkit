@@ -69,7 +69,7 @@ def input_hashes(root, output=None):
                 continue
             if (relative.parts[0] == "assets" or path.suffix.lower() in (".py", ".spec", ".js", ".json")
                     or (len(relative.parts) == 1 and (name.startswith("requirements") and name.endswith(".txt")
-                                                     or name == "build_exe.bat"))):
+                                                     or name in ("build_exe.bat", "LICENSE")))):
                 paths.add(path)
     result = {}
     for path in sorted(paths):

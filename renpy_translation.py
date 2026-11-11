@@ -1,4 +1,4 @@
-"""Conservative Ren'Py 8.3/8.4 connector; game source is never executed here."""
+"""Connector for reviewed Ren'Py builds; game source is never executed here."""
 import hashlib
 from pathlib import Path
 import re
@@ -25,57 +25,189 @@ REVIEWED_ENGINES = {
      "57bb26cc2e226b195c97cd9ec8b3553489e5735dcb35cbde812ce1c0f8b24db6",
      "fce2d73aa4f335c3758a1511e18fbc2acf37765c7519112689776cd7fc9760c8",
      "6dcf3ff0478aa0767fe349d3a3b1be08ceaf6ec4a3bb0a3fd37ce82b5b008678"): "8.4.2",
+    ("6cb18c852c334a32161cff170e87aca3bf925a8883136cd25046506b7868b9bf",
+     "0ef8c83409eb1571c4d617a4179ebfea1966087612a22b37f07bd0cc84e25c41",
+     "3413dda57170c0dc198603a93c8aff944a9a61dc760ac5292956a8dffef716ae",
+     "8f2252f00fd2041406b212baedcf933501efba373fdd9e256831b74c9cb54d50",
+     "d8142d074a5814eb2a60ab1270c11add3b34a523bef8dbce996e5f9739ec0a31",
+     "460ce1daa1a28bdaad01bcfc1ac3dd69e14edb71fec1da9ada4665baf3b8e815"): "8.3.6",
+    ("319ef8a18b3b0ce426240c738405dc90d52d89861e3694c6ef04a2227271aefc",
+     "635dc2b51a9b208c0ceac4a6159311e690234ec8350535cf25c89d735e7dda55",
+     "04b64d77a538a944d88feb755ca14bea690b04835debe6f2d5f1e938a1240d0d",
+     "57bb26cc2e226b195c97cd9ec8b3553489e5735dcb35cbde812ce1c0f8b24db6",
+     "fce2d73aa4f335c3758a1511e18fbc2acf37765c7519112689776cd7fc9760c8",
+     "3e9a1de88858be5c8ccc9e2fe0d4ad08f578ae136469fc89b679efe593093735"): "8.4.1",
+    ("fb38bc8021730d2f523c6d7335972d0a6bc6a411056f44889c3bfc6a29d47b79",
+     "e352d986abaa862b51bd7148fb7cddacec02039a631794d19b79e90a7e56b671",
+     "04b64d77a538a944d88feb755ca14bea690b04835debe6f2d5f1e938a1240d0d",
+     "3039d26958a2f9a103bf3f6cbf9057524ccf0837f84942c6e09d434ee6a2f6bc",
+     "655a8208796268fc7b59754def8df28e0915f425a6aab7da5e126d46d59ff1ec",
+     "6dcf3ff0478aa0767fe349d3a3b1be08ceaf6ec4a3bb0a3fd37ce82b5b008678"): "8.5.0",
+    ("c2cdec4f8042a400db09d0e08a6bbdb8588b27a1620f36dd48c374cc4e11778c",
+     "90e6a09592da53a0349410decdad5d30c662f7777a9ae663d9e8037ab4469839",
+     "fcad45b56c5f52d555e99995761119dd1d58d4978a106b8b7f1ca18cea64732c",
+     "1780eb23eb5d7a6f1fe7329f2f3313b00319ae45506eca21edfef40cda13eab2",
+     "9735f8ec31324a410f0c3ddc2c254b747fa605c4bd97f528144560203e080ce0",
+     "79177cfbb1437e4e39d7ecb5b12c2e6e8ac38312031cea9e8d972b9b62c4c385"): "8.5.2",
 }
 
 
+_QUOTED = r"""(?:"[^"\\]*"|'[^'\\]*')"""
+_NUMBER = r"-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)"
+_PAIR = r"\([ \t]*" + _NUMBER + r"[ \t]*,[ \t]*" + _NUMBER + r"[ \t]*\)"
+_POSITION = dict.fromkeys(("xalign", "yalign", "xpos", "ypos", "xsize", "ysize"), _NUMBER)
+_POSITION.update(align=_PAIR, pos=_PAIR, xysize=_PAIR)
+_STYLE = {"style": _QUOTED, "style_prefix": _QUOTED}
+# The accepted chain contains a single original-order loop and a single
+# textbutton. These are all the layout statements and appearance properties
+# the checker allows. Values are literals, never inspected by evaluating them.
+_LAYOUTS = ("vbox", "hbox", "fixed", "frame", "window")
+_APPEARANCE = {
+    "screen": {"style_prefix": _QUOTED},
+    "for": {},
+    "textbutton": {**_POSITION, **_STYLE, "text_font": _QUOTED, "text_size": _NUMBER},
+    **{kind: {**_POSITION, **_STYLE} for kind in _LAYOUTS},
+}
+for _box in ("vbox", "hbox"):
+    _APPEARANCE[_box]["spacing"] = _NUMBER
+for _window in ("frame", "window"):
+    _APPEARANCE[_window]["padding"] = _PAIR
+
+_CHOICE_HEADER = re.compile(r"screen[ \t]+choice[ \t]*\([ \t]*items[ \t]*\)[ \t]*:")
+_CHOICE_LOOP = re.compile(r"for[ \t]+i[ \t]+in[ \t]+items[ \t]*:")
+_CHOICE_LAYOUT = re.compile(r"(" + "|".join(_LAYOUTS) + r")(?:[ \t]+(.*?))?[ \t]*:")
+_CHOICE_BUTTON = re.compile(r"textbutton[ \t]+i\.caption[ \t]+action[ \t]+i\.action(?=[ \t:]|$)(.*)")
+_QUOTES_OR_COMMENT = re.compile(_QUOTED + r"|#.*")
+
+
+def _without_comment(line):
+    return _QUOTES_OR_COMMENT.sub(lambda match: "" if match[0].startswith("#") else match[0], line).rstrip()
+
+
+def _literal_properties(text, kind):
+    properties = []
+    allowed = _APPEARANCE[kind]
+    while text:
+        name = re.match(r"([a-z_]+)[ \t]+", text)
+        if not name or name[1] not in allowed:
+            return None
+        value = re.match(allowed[name[1]] + r"(?=[ \t]|$)", text[name.end():])
+        if not value:
+            return None
+        properties.append((name[1], value[0]))
+        text = text[name.end() + value.end():].lstrip()
+    return properties
+
+
+def _choice_shape(lines, kind="screen", properties=(), in_items=False, depth=0):
+    """Return the chain of statement names and literal keyword pairs."""
+    if depth > 16:
+        return None
+    props = list(properties)
+    child = None
+    index = 0
+    while index < len(lines):
+        indent, statement = lines[index]
+        if indent != lines[0][0]:
+            return None
+        end = index + 1
+        while end < len(lines) and lines[end][0] > indent:
+            end += 1
+        body = lines[index + 1:end]
+        index = end
+        prop = _literal_properties(statement, kind)
+        if prop is not None and len(prop) == 1 and not body:
+            props.extend(prop)
+            continue
+        if child is not None or kind == "textbutton":
+            return None
+        if _CHOICE_LOOP.fullmatch(statement) and not in_items:
+            child = _choice_shape(body, "for", in_items=True, depth=depth + 1)
+        elif layout := _CHOICE_LAYOUT.fullmatch(statement):
+            inline = _literal_properties(layout[2] or "", layout[1])
+            if inline is None:
+                return None
+            child = _choice_shape(body, layout[1], inline, in_items, depth + 1)
+        elif in_items and (button := _CHOICE_BUTTON.fullmatch(statement)):
+            tail = button[1].strip()
+            block = tail.endswith(":")
+            inline = _literal_properties(tail[:-1].rstrip() if block else tail, "textbutton")
+            if inline is None or block != bool(body):
+                return None
+            child = _choice_shape(body, "textbutton", inline, in_items, depth + 1)
+        if child is None:
+            return None
+    if kind == "textbutton":
+        props.append(("action", "i.action"))
+    elif child is None:
+        return None
+    if len(props) != len({name for name, _ in props}):
+        return None
+    return ((kind, tuple(sorted(props))),) + (child or ())
+
+
 def _standard_choice_sources(game):
-    """Qualify the SDK's small default choice screen, not arbitrary menus."""
+    """Find visible source for a standard ADV choice screen."""
     qualified = []
     for path in sorted(game.rglob("*.rpy")):
         rel = path.relative_to(game)
         if path.name.startswith("zz_") or set(rel.parts) & {"tl", "saves", "cache"}:
             continue
-        source = path.read_text(encoding="utf-8-sig", errors="strict")
-        lines = source.splitlines()
+        try:
+            source = path.read_bytes()
+            lines = source.decode("utf-8-sig").splitlines()
+        except (OSError, UnicodeError):
+            continue
         for index, line in enumerate(lines):
-            if not re.fullmatch(r"screen choice\(items\)\s*:\s*(?:#.*)?", line):
+            if not _CHOICE_HEADER.fullmatch(_without_comment(line)):
                 continue
             body = []
             for following in lines[index + 1:]:
-                if following.strip() and not following[0].isspace() and not following.lstrip().startswith("#"):
+                following = _without_comment(following)
+                if not following:
+                    continue
+                if not following[0].isspace():
                     break
-                if following.strip() and not following.lstrip().startswith("#"):
-                    body.append(following.strip())
-            if body == ['style_prefix "choice"', 'vbox:', 'for i in items:', 'textbutton i.caption action i.action']:
-                qualified.append((rel.as_posix(), index + 1, hashlib.sha256(path.read_bytes()).hexdigest()))
+                statement = following.lstrip(" ")
+                if not statement or statement[0].isspace():
+                    # Unusual indentation is not a reviewed layout.
+                    body.clear()
+                    break
+                body.append((len(following) - len(statement), statement))
+            shape = _choice_shape(body)
+            if shape is not None:
+                qualified.append((rel.as_posix(), index + 1, hashlib.sha256(source).hexdigest(), shape))
     return qualified
 
 
-def survey(root):
+def _inspect(root):
     result = {"supported": False, "mechanism": "unsupported", "reasons": [],
               "coverage": {"dialogue": False, "standard_adv_menu": False,
                            "nvl": False, "custom_menu": False}}
-    root = Path(root).resolve()
     try:
         pair = tuple(hashlib.sha256((root / rel).read_bytes()).hexdigest() for rel in ENGINE_FILES)
         version = REVIEWED_ENGINES.get(pair)
         if version is None:
-            result["reasons"].append("Ren'Py dialogue/menu interfaces are not a reviewed 8.3/8.4 engine build; original text will be kept.")
-            return result
+            result["reasons"].append("Ren'Py dialogue/menu interfaces do not match a reviewed engine build; original text will be kept.")
+            return result, (), ()
         if not (root / "game").is_dir():
             result["reasons"].append("No game directory was found.")
-            return result
+            return result, (), ()
         choices = _standard_choice_sources(root / "game")
     except (OSError, UnicodeError, ValueError) as exc:
         result["reasons"].append("Translation interface inspection failed: " + type(exc).__name__)
-        return result
+        return result, (), ()
     result.update(supported=True, mechanism="renpy_loopback_connector", engine_version=version)
     result["coverage"].update(dialogue=True, standard_adv_menu=bool(choices))
     result["reasons"].append("Reviewed Ren'Py " + version + ": executed standard ADV say statements; prediction never requests translation.")
-    result["reasons"].append("Default source-visible ADV choice screen is supported." if choices else
+    result["reasons"].append("Source-visible standard ADV choice screen with static appearance is supported." if choices else
                              "Choice screen source is custom or unavailable; menu choices remain in the original language.")
     result["reasons"].append("NVL, custom character/menu paths and external Luna embedding remain outside built-in translation coverage.")
-    return result
+    return result, list(zip(ENGINE_FILES, pair)), choices
+
+
+def survey(root):
+    return _inspect(Path(root).resolve())[0]
 
 
 _CONNECTOR = r'''
@@ -280,6 +412,48 @@ def _filter(text):
     finally:
         del frame
 
+def _matches_choice_shape(screen, shape):
+    # The visible source and the running screen can differ, for example when
+    # a compiled script supplies a different node at the same source location.
+    # Inspect the loaded nodes without evaluating any of their expressions.
+    slast = _engine.sl2.slast
+    node = screen.ast
+    if type(node) is not slast.SLScreen or screen.function is not node or node.name != "choice":
+        return False
+    parameters = node.parameters.parameters
+    if tuple(parameters) != ("items",):
+        return False
+    parameter = parameters["items"]
+    if parameter.kind != parameter.POSITIONAL_OR_KEYWORD or parameter.default is not parameter.empty:
+        return False
+    layouts = {"vbox": "vertical", "hbox": "horizontal", "fixed": "fixed"}
+    for kind, keywords in shape:
+        if node.atl_transform is not None or tuple(sorted(node.keyword)) != keywords:
+            return False
+        if kind == "for":
+            if (type(node) is not slast.SLFor or node.variable != "i" or
+                    node.expression != "items" or node.index_expression is not None):
+                return False
+        elif kind != "screen":
+            if type(node) is not slast.SLDisplayable or node.name != kind or node.variable is not None:
+                return False
+            if kind == "textbutton":
+                return (node.displayable is _engine.ui._textbutton and
+                        node.positional == ["i.caption"] and not node.children and not node.default_keywords)
+            if node.positional:
+                return False
+            if kind in layouts:
+                if (node.displayable is not _engine.display.layout.MultiBox or
+                        node.default_keywords != {"layout": layouts[kind]}):
+                    return False
+            elif node.displayable is not _engine.display.layout.Window or node.default_keywords:
+                return False
+        if len(node.children) != 1:
+            return False
+        node = node.children[0]
+    return False
+
+
 def _default_choice_screen():
     try:
         screen = _engine.display.screen.get_screen_variant("choice")
@@ -290,11 +464,12 @@ def _default_choice_screen():
         filename = filename.split("/game/", 1)[-1]
         if filename.startswith("game/"):
             filename = filename[5:]
-        for rel, expected_line, digest in _choices:
+        for rel, expected_line, digest, shape in _choices:
             if filename == rel and line == expected_line:
                 path = _os.path.join(_engine.config.gamedir, *rel.split("/"))
                 with open(path, "rb") as stream:
-                    return _hashlib.sha256(stream.read()).hexdigest() == digest
+                    return (_hashlib.sha256(stream.read()).hexdigest() == digest and
+                            _matches_choice_shape(screen, shape))
     except Exception:
         pass
     return False
@@ -370,12 +545,11 @@ def install(engine):
 
 def render(root):
     root = Path(root).resolve()
-    found = survey(root)
+    found, hashes, choices = _inspect(root)
     if not found["supported"]:
         raise ValueError("; ".join(found["reasons"]))
-    hashes = [(rel, hashlib.sha256((root / rel).read_bytes()).hexdigest()) for rel in ENGINE_FILES]
     runtime = (TEXT_RUNTIME + "\n_engine_hashes = " + repr(hashes) +
-               "\n_choices = " + repr(_standard_choice_sources(root / "game")) + "\n" + _CONNECTOR)
+               "\n_choices = " + repr(choices) + "\n" + _CONNECTOR)
     # A private ordinary module owns ephemeral endpoint/state. No threads,
     # sockets, service objects, API credentials or module objects enter store.
     bootstrap = '''import sys as _sys
